@@ -1,54 +1,87 @@
-# Remotion video
+# Manacost Video Pipeline
 
-<p align="center">
-  <a href="https://github.com/remotion-dev/logo">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://github.com/remotion-dev/logo/raw/main/animated-logo-banner-dark.apng">
-      <img alt="Animated Remotion Logo" src="https://github.com/remotion-dev/logo/raw/main/animated-logo-banner-light.gif">
-    </picture>
-  </a>
-</p>
+Автоматический пайплайн для сборки YouTube-роликов `2560x1440` из статей Manacost.
 
-Welcome to your Remotion project!
+## Что делает
 
-## Commands
+- Загружает статью по URL и очищает основной контент через Readability.
+- Делит материал на сцены с целевой длительностью 3-5 минут.
+- Берет изображения из статьи и ищет карточные арты через `https://db.kolodahs.ru/api/v1`.
+- Использует full-screen background только для широких качественных изображений.
+- Вертикальные карты, листы карт и квадратные арты ставит только в отдельный foreground-блок, без растягивания на весь кадр.
+- Показывает на сцене только короткий хук и до двух тезисов, без длинных служебных описаний.
+- Генерирует русскую озвучку через ElevenLabs, если задан `ELEVENLABS_API_KEY`.
+- Создает JSON-субтитры и `.srt`, но не вшивает их в кадр по умолчанию.
+- Генерирует временную тихую музыкальную подложку через FFmpeg.
+- Рендерит Remotion-композицию в `2560x1440`.
+- Проверяет финальный MP4 через `ffprobe`.
 
-**Install Dependencies**
+## Настройка
 
-```console
-npm i
+```powershell
+npm.cmd install
+Copy-Item .env.example .env
 ```
 
-**Start Preview**
+В `.env` добавь:
 
-```console
-npm run dev
+```env
+ELEVENLABS_API_KEY=...
 ```
 
-**Render video**
+Ключи не хранятся в коде и не должны попадать в git.
 
-```console
-npx remotion render
+## Основной запуск
+
+```powershell
+npm.cmd run from-url -- "https://hs-manacost.ru/gajd-po-kraftu-hearthstone-kataklizm/"
 ```
 
-**Upgrade Remotion**
+Результат будет в:
 
-```console
-npx remotion upgrade
+```text
+output/<slug>/final-2k.mp4
+output/<slug>/manifest.json
+output/<slug>/script.md
+output/<slug>/subtitles.srt
+output/<slug>/render-report.json
 ```
 
-## Docs
+## Полезные команды
 
-Get started with Remotion by reading the [fundamentals page](https://www.remotion.dev/docs/the-fundamentals).
+Dry-run без озвучки и без финального рендера:
 
-## Help
+```powershell
+npm.cmd run dry-run
+```
 
-We provide help on our [Discord server](https://discord.gg/6VzzNDwUwV).
+Сгенерировать/перегенерировать озвучку по готовому manifest:
 
-## Issues
+```powershell
+npm.cmd run voiceover -- "<slug>"
+```
 
-Found an issue with Remotion? [File an issue here](https://github.com/remotion-dev/remotion/issues/new).
+Отрендерить готовый manifest:
 
-## License
+```powershell
+npm.cmd run render -- "<slug>"
+```
 
-Note that for some entities a company license is needed. [Read the terms here](https://github.com/remotion-dev/remotion/blob/main/LICENSE.md).
+Проверить готовый MP4:
+
+```powershell
+npm.cmd run qa -- "<slug>"
+```
+
+Открыть Remotion Studio:
+
+```powershell
+npm.cmd run dev
+```
+
+## Текущие ограничения
+
+- Сценарий пока строится эвристически из статьи. Следующий шаг - добавить LLM-редактор сценария, чтобы текст звучал как полноценный YouTube-нарратив.
+- Внешний web image search пока не подключен. Сейчас используются изображения статьи и HSData/Blizzard card art.
+- Музыка сейчас локально сгенерированная quiet ambient bed. Ее можно заменить на файл с лицензией и прописать в manifest.
+- Если статья не содержит качественного широкого изображения, Remotion рисует чистый кодовый фон и кладет карты поверх. Это сделано специально, чтобы не растягивать карточный арт на весь экран.
