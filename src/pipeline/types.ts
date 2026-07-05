@@ -17,6 +17,26 @@ export type ArticleSection = {
   text: string;
 };
 
+export type ArticleCardCategory =
+  | "best-legendary"
+  | "situational-legendary"
+  | "best-epic"
+  | "situational-epic"
+  | "last-year"
+  | "other";
+
+export type ArticleCardMention = {
+  id: string;
+  name: string;
+  cardId?: string;
+  imageUrl?: string;
+  rarity?: string;
+  sectionHeading: string;
+  category: ArticleCardCategory;
+  text: string;
+  order: number;
+};
+
 export type ArticleData = {
   url: string;
   slug: string;
@@ -27,6 +47,7 @@ export type ArticleData = {
   publishedAt?: string;
   text: string;
   sections: ArticleSection[];
+  cardMentions: ArticleCardMention[];
   images: ArticleImage[];
 };
 
@@ -54,6 +75,8 @@ export type VideoScene = {
   narration: string;
   onScreenText: string;
   keywords: string[];
+  cardNames?: string[];
+  cardIds?: string[];
   assetIds: string[];
   audioPath?: string;
   durationSeconds: number;

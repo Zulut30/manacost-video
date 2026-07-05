@@ -9,7 +9,7 @@ import {
 import { hsCardToAssetDraft, searchConstructedCards } from "./hsdata";
 import { runPublicDir } from "./manifest";
 import { extractKeywords, extractNamedPhrases, extractTitlePhrases } from "./text";
-import type { PipelineAsset, PipelineManifest } from "./types";
+import type { ArticleCardMention, PipelineAsset, PipelineManifest } from "./types";
 
 type AssetOptions = {
   force?: boolean;
@@ -90,7 +90,8 @@ const downloadHsDataImages = async (
   options: AssetOptions,
 ): Promise<PipelineAsset[]> => {
   const imagesDir = path.join(runPublicDir(manifest.slug), "images");
-  const maxImages = options.maxHsDataImages || 18;
+  const maxImages = options.maxHsDataImages || 40;
+  const mentionQueue = (manifest.article.cardMentions || []).slice(0, maxImages);
   const namedQueries = Array.from(
     new Set([
       ...extractNamedPhrases(manifest.article.text, 36),
@@ -116,86 +117,207 @@ const downloadHsDataImages = async (
   const assets: PipelineAsset[] = [];
   const seenCardIds = new Set<string>();
 
+  if (mentionQueue.length > 0) {
+    for (const mention of mentionQueue) {
+      if (assets.length >= maxImages) {
+        break;
+      }
+
+      const cards = await searchConstructedCards(mention.cardId || mention.name, 1);
+      const added = await addHsCardAssets({
+        cards,
+        assets,
+        seenCardIds,
+        imagesDir,
+        options,
+        manifest,
+        mention,
+      });
+
+      if (!added && mention.imageUrl) {
+        const fallbackAsset = await downloadMentionImage(
+          mention,
+          assets.length,
+          imagesDir,
+          options,
+        );
+        if (fallbackAsset) {
+          assets.push(fallbackAsset);
+        }
+      }
+    }
+
+    return assets;
+  }
+
   for (const query of queryPool) {
     if (assets.length >= maxImages) {
       break;
     }
 
     const cards = await searchConstructedCards(query, 3);
-    for (const card of cards) {
-      if (seenCardIds.has(card.card_id) || assets.length >= maxImages) {
-        continue;
-      }
-
-      seenCardIds.add(card.card_id);
-      const draft = hsCardToAssetDraft(card, assets.length);
-      if (!draft.imageUrl) {
-        continue;
-      }
-
-      const imageUrls = draft.imageUrls?.length
-        ? draft.imageUrls
-        : ([draft.imageUrl].filter(Boolean) as string[]);
-      let lastError: unknown;
-      let bestAsset: PipelineAsset | undefined;
-      let skippedForQuality = 0;
-
-      for (const [candidateIndex, imageUrl] of imageUrls.entries()) {
-        try {
-          const ext = inferExtension(imageUrl, null);
-          const filename = `hsdata-${String(assets.length + 1).padStart(
-            2,
-            "0",
-          )}-${safeFilePart(draft.title)}-${candidateIndex + 1}${ext}`;
-          const absolutePath = path.join(imagesDir, filename);
-          const result = await downloadFile(imageUrl, absolutePath, {
-            force: options.force,
-          });
-          const dimensions = getImageDimensions(result.path);
-          const qualityScore = scoreImage(dimensions.width, dimensions.height);
-          if (!isUsableForeground(dimensions.width, dimensions.height, qualityScore)) {
-            skippedForQuality += 1;
-            continue;
-          }
-
-          const candidateAsset: PipelineAsset = {
-            id: draft.id,
-            kind: draft.kind,
-            role: draft.role,
-            source: draft.source,
-            title: draft.title,
-            path: toPublicPath(result.path),
-            originalUrl: imageUrl,
-            attribution: draft.attribution,
-            width: dimensions.width,
-            height: dimensions.height,
-            tags: draft.tags,
-            qualityScore,
-          };
-
-          if (!bestAsset || candidateAsset.qualityScore > bestAsset.qualityScore) {
-            bestAsset = candidateAsset;
-          }
-        } catch (error) {
-          lastError = error;
-        }
-      }
-
-      if (bestAsset) {
-        assets.push(bestAsset);
-      } else if (lastError) {
-        manifest.render?.warnings.push(
-          `HSData image skipped: ${draft.imageUrl} (${String(lastError)})`,
-        );
-      } else if (skippedForQuality === imageUrls.length) {
-        manifest.render?.warnings.push(
-          `HSData image skipped for low visual quality: ${draft.title}`,
-        );
-      }
-    }
+    await addHsCardAssets({
+      cards,
+      assets,
+      seenCardIds,
+      imagesDir,
+      options,
+      manifest,
+    });
   }
 
   return assets;
+};
+
+const mentionTags = (mention?: ArticleCardMention): string[] => {
+  if (!mention) {
+    return [];
+  }
+
+  return [
+    mention.id,
+    mention.name,
+    mention.cardId,
+    mention.sectionHeading,
+    mention.category,
+  ].filter(Boolean) as string[];
+};
+
+const upscaleTooltipImage = (url: string): string => {
+  return url.replace(/\/256x\//u, "/512x/");
+};
+
+const downloadMentionImage = async (
+  mention: ArticleCardMention,
+  index: number,
+  imagesDir: string,
+  options: AssetOptions,
+): Promise<PipelineAsset | undefined> => {
+  if (!mention.imageUrl) {
+    return undefined;
+  }
+
+  const imageUrl = upscaleTooltipImage(mention.imageUrl);
+  try {
+    const ext = inferExtension(imageUrl, ".png");
+    const filename = `article-card-${String(index + 1).padStart(2, "0")}-${safeFilePart(
+      mention.name,
+    )}${ext}`;
+    const absolutePath = path.join(imagesDir, filename);
+    const result = await downloadFile(imageUrl, absolutePath, { force: options.force });
+    const dimensions = getImageDimensions(result.path);
+    const qualityScore = scoreImage(dimensions.width, dimensions.height);
+    if (!isUsableForeground(dimensions.width, dimensions.height, qualityScore)) {
+      return undefined;
+    }
+
+    return {
+      id: `article-card-${index + 1}-${safeFilePart(mention.cardId || mention.name)}`,
+      kind: "image",
+      role: "card",
+      source: "article",
+      title: mention.name,
+      path: toPublicPath(result.path),
+      originalUrl: imageUrl,
+      attribution: "Manacost card tooltip / HearthstoneJSON",
+      width: dimensions.width,
+      height: dimensions.height,
+      tags: mentionTags(mention),
+      qualityScore,
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+const addHsCardAssets = async (params: {
+  cards: Awaited<ReturnType<typeof searchConstructedCards>>;
+  assets: PipelineAsset[];
+  seenCardIds: Set<string>;
+  imagesDir: string;
+  options: AssetOptions;
+  manifest: PipelineManifest;
+  mention?: ArticleCardMention;
+}): Promise<boolean> => {
+  let added = false;
+
+  for (const card of params.cards) {
+    if (
+      params.seenCardIds.has(card.card_id) ||
+      params.assets.length >= (params.options.maxHsDataImages || 40)
+    ) {
+      continue;
+    }
+
+    params.seenCardIds.add(card.card_id);
+    const draft = hsCardToAssetDraft(card, params.assets.length);
+    if (!draft.imageUrl) {
+      continue;
+    }
+
+    const imageUrls = draft.imageUrls?.length
+      ? draft.imageUrls
+      : ([draft.imageUrl].filter(Boolean) as string[]);
+    let lastError: unknown;
+    let bestAsset: PipelineAsset | undefined;
+    let skippedForQuality = 0;
+
+    for (const [candidateIndex, imageUrl] of imageUrls.entries()) {
+      try {
+        const ext = inferExtension(imageUrl, null);
+        const filename = `hsdata-${String(params.assets.length + 1).padStart(
+          2,
+          "0",
+        )}-${safeFilePart(draft.title)}-${candidateIndex + 1}${ext}`;
+        const absolutePath = path.join(params.imagesDir, filename);
+        const result = await downloadFile(imageUrl, absolutePath, {
+          force: params.options.force,
+        });
+        const dimensions = getImageDimensions(result.path);
+        const qualityScore = scoreImage(dimensions.width, dimensions.height);
+        if (!isUsableForeground(dimensions.width, dimensions.height, qualityScore)) {
+          skippedForQuality += 1;
+          continue;
+        }
+
+        const candidateAsset: PipelineAsset = {
+          id: draft.id,
+          kind: draft.kind,
+          role: draft.role,
+          source: draft.source,
+          title: draft.title,
+          path: toPublicPath(result.path),
+          originalUrl: imageUrl,
+          attribution: draft.attribution,
+          width: dimensions.width,
+          height: dimensions.height,
+          tags: [...draft.tags, ...mentionTags(params.mention)],
+          qualityScore,
+        };
+
+        if (!bestAsset || candidateAsset.qualityScore > bestAsset.qualityScore) {
+          bestAsset = candidateAsset;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (bestAsset) {
+      params.assets.push(bestAsset);
+      added = true;
+    } else if (lastError) {
+      params.manifest.render?.warnings.push(
+        `HSData image skipped: ${draft.imageUrl} (${String(lastError)})`,
+      );
+    } else if (skippedForQuality === imageUrls.length) {
+      params.manifest.render?.warnings.push(
+        `HSData image skipped for low visual quality: ${draft.title}`,
+      );
+    }
+  }
+
+  return added;
 };
 
 const normalizeQueryText = (value: string): string => {
@@ -332,6 +454,38 @@ const assetMatchesScene = (asset: PipelineAsset, keywordText: string): boolean =
   return asset.tags.some((tag) => keywordText.includes(tag.toLowerCase()));
 };
 
+const normalizedAssetKeys = (asset: PipelineAsset): Set<string> => {
+  return new Set([asset.title, ...asset.tags].map(normalizeQueryText));
+};
+
+const assetMatchesSceneCards = (
+  asset: PipelineAsset,
+  scene: PipelineManifest["scenes"][number],
+): boolean => {
+  const cardKeys = [...(scene.cardIds || []), ...(scene.cardNames || [])]
+    .map(normalizeQueryText)
+    .filter(Boolean);
+  if (cardKeys.length === 0) {
+    return false;
+  }
+
+  const assetKeys = normalizedAssetKeys(asset);
+  return cardKeys.some((key) => assetKeys.has(key));
+};
+
+const sceneCardOrder = (
+  asset: PipelineAsset,
+  scene: PipelineManifest["scenes"][number],
+): number => {
+  const assetKeys = normalizedAssetKeys(asset);
+  const cardKeys = [...(scene.cardIds || []), ...(scene.cardNames || [])]
+    .map(normalizeQueryText)
+    .filter(Boolean);
+  const index = cardKeys.findIndex((key) => assetKeys.has(key));
+
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+};
+
 const foregroundPriority = (asset: PipelineAsset): number => {
   const aspect = imageAspect(asset);
   const isCardShaped = aspect >= 0.55 && aspect <= 1.05 ? 1 : 0;
@@ -364,34 +518,44 @@ const linkSceneAssets = (
 
   return manifest.scenes.map((scene, index) => {
     const keywordText = scene.keywords.join(" ").toLowerCase();
+    const sceneHasExplicitCards =
+      (scene.cardIds?.length || 0) > 0 || (scene.cardNames?.length || 0) > 0;
     const backgroundMatch = backgroundAssets.find((asset) =>
       assetMatchesScene(asset, keywordText),
     );
-    const foregroundMatches = foregroundAssets.filter((asset) =>
-      assetMatchesScene(asset, keywordText),
-    ).sort((a, b) => foregroundPriority(b) - foregroundPriority(a));
+    const exactForegroundMatches = foregroundAssets
+      .filter((asset) => assetMatchesSceneCards(asset, scene))
+      .sort((a, b) => sceneCardOrder(a, scene) - sceneCardOrder(b, scene));
+    const keywordForegroundMatches = sceneHasExplicitCards
+      ? []
+      : foregroundAssets
+          .filter((asset) => assetMatchesScene(asset, keywordText))
+          .sort((a, b) => foregroundPriority(b) - foregroundPriority(a));
     const fallbackBackground =
       backgroundAssets[index % Math.max(1, backgroundAssets.length)];
     const foregroundStart =
       (index * 2) % Math.max(1, preferredForegroundAssets.length);
-    const fallbackForeground = [
-      preferredForegroundAssets[foregroundStart],
-      preferredForegroundAssets[
-        (foregroundStart + 1) % Math.max(1, preferredForegroundAssets.length)
-      ],
-      preferredForegroundAssets[
-        (foregroundStart + 2) % Math.max(1, preferredForegroundAssets.length)
-      ],
-    ];
+    const fallbackForeground = sceneHasExplicitCards
+      ? []
+      : [
+          preferredForegroundAssets[foregroundStart],
+          preferredForegroundAssets[
+            (foregroundStart + 1) % Math.max(1, preferredForegroundAssets.length)
+          ],
+          preferredForegroundAssets[
+            (foregroundStart + 2) % Math.max(1, preferredForegroundAssets.length)
+          ],
+        ];
     const chosenBackground =
       (index === 0 && heroAsset) || backgroundMatch || fallbackBackground;
     const chosen = Array.from(
       new Set([
         chosenBackground?.id,
-        ...foregroundMatches.map((asset) => asset.id),
+        ...exactForegroundMatches.map((asset) => asset.id),
+        ...keywordForegroundMatches.map((asset) => asset.id),
         ...fallbackForeground.map((asset) => asset?.id),
       ].filter(Boolean) as string[]),
-    ).slice(0, 4);
+    ).slice(0, sceneHasExplicitCards ? 12 : 5);
 
     return {
       ...scene,

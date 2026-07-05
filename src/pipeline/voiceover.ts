@@ -121,13 +121,32 @@ const chooseVoice = async (apiKey: string): Promise<ElevenVoice> => {
   }
 
   const allowLibraryVoices = process.env.ELEVENLABS_ALLOW_LIBRARY_VOICES === "true";
+  const allowNonRussianVoice =
+    process.env.ELEVENLABS_ALLOW_NON_RUSSIAN_VOICE === "true";
   const usableVoices = allowLibraryVoices
     ? voices
     : voices.filter((voice) => voice.category === "premade");
+  const russianVoices = usableVoices.filter(isRussianVoice);
+
+  if (russianVoices.length > 0) {
+    return [...russianVoices].sort((a, b) => scoreVoice(b) - scoreVoice(a))[0];
+  }
+
+  if (!allowNonRussianVoice) {
+    throw new Error(
+      "ElevenLabs account has no API-usable Russian voice. Set ELEVENLABS_VOICE_ID to an available Russian voice, enable ELEVENLABS_ALLOW_LIBRARY_VOICES=true on a paid plan, or explicitly allow fallback with ELEVENLABS_ALLOW_NON_RUSSIAN_VOICE=true.",
+    );
+  }
 
   return [...(usableVoices.length > 0 ? usableVoices : voices)].sort(
     (a, b) => scoreVoice(b) - scoreVoice(a),
   )[0];
+};
+
+const isRussianVoice = (voice: ElevenVoice): boolean => {
+  const labels = Object.values(voice.labels || {}).join(" ").toLowerCase();
+  const name = voice.name.toLowerCase();
+  return /russian|рус|ru\b|ru-|russia|moscow|petersburg/u.test(`${labels} ${name}`);
 };
 
 const scoreVoice = (voice: ElevenVoice): number => {
@@ -136,7 +155,7 @@ const scoreVoice = (voice: ElevenVoice): number => {
   const profile = `${labels} ${name}`;
   let score = 0;
 
-  if (/russian|рус|ru\b/u.test(profile)) {
+  if (isRussianVoice(voice)) {
     score += 40;
   }
   if (

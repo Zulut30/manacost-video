@@ -1,13 +1,18 @@
 import { captionsFromText } from "./subtitles";
 import {
-  clampText,
   cleanText,
   estimateSpeechSeconds,
   extractKeywords,
   extractTitlePhrases,
   splitSentences,
 } from "./text";
-import type { ArticleData, PipelineManifest, VideoScene } from "./types";
+import type {
+  ArticleCardCategory,
+  ArticleCardMention,
+  ArticleData,
+  PipelineManifest,
+  VideoScene,
+} from "./types";
 import {
   DEFAULT_FPS,
   DEFAULT_HEIGHT,
@@ -22,28 +27,24 @@ type BuildSceneOptions = {
   targetMinutes?: number;
 };
 
-const FALLBACK_HOOKS = [
-  "Крафт без паники",
-  "Пыль дороже хайпа",
-  "Легендарки: точечно",
-  "Эпики: не спешить",
-  "Сначала мета",
-  "Проверяй архетип",
-  "Финальный вердикт",
-];
-
-const BORING_HEADINGS = new Set([
-  "главное",
-  "итог",
-  "обновлено",
-  "hearthstone",
-  "manacost",
-]);
-
-const sceneTitle = (value: string): string => {
-  const clean = cleanText(value).replace(/[.?!]+$/u, "");
-  return clean.length > 46 ? `${clean.slice(0, 43)}...` : clean;
+type DraftScene = {
+  idSuffix: string;
+  title: string;
+  headline: string;
+  lead: string;
+  mentions: ArticleCardMention[];
+  beats?: string[];
+  includeReasons?: boolean;
 };
+
+const CATEGORY_ORDER: ArticleCardCategory[] = [
+  "best-legendary",
+  "situational-legendary",
+  "best-epic",
+  "situational-epic",
+  "last-year",
+  "other",
+];
 
 const shortLine = (value: string, maxChars: number): string => {
   const clean = cleanText(value)
@@ -68,97 +69,286 @@ const shortLine = (value: string, maxChars: number): string => {
   return picked.length > 0 ? picked.join(" ") : clean.slice(0, maxChars);
 };
 
-const normalizeHeading = (value: string | undefined, index: number): string => {
-  const clean = shortLine(value || "", 32);
-  if (!clean || BORING_HEADINGS.has(clean.toLowerCase())) {
-    return FALLBACK_HOOKS[index % FALLBACK_HOOKS.length];
-  }
-  return clean;
+const normalizeText = (value: string): string => {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/ё/gu, "е")
+    .replace(/[’'`]/gu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
 };
 
-const makeHeadline = (
+const cardNameList = (mentions: ArticleCardMention[], limit = 4): string => {
+  const names = mentions.slice(0, limit).map((mention) => mention.name);
+  if (names.length <= 1) {
+    return names[0] || "";
+  }
+
+  return `${names.slice(0, -1).join(", ")} и ${names.at(-1)}`;
+};
+
+const reasonFromMention = (mention: ArticleCardMention): string => {
+  const afterDash = mention.text.split(/\s+[—–-]\s+/u).slice(1).join(" — ");
+  const source = afterDash || mention.text;
+  const firstSentence = splitSentences(source)[0] || source;
+  const normalizedName = normalizeText(mention.name);
+  const withoutRepeatedName = cleanText(firstSentence).replace(
+    new RegExp(`^${mention.name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\s*[—–-]?\\s*`, "iu"),
+    "",
+  );
+
+  if (normalizeText(withoutRepeatedName) === normalizedName) {
+    return "ключевая карта своего архетипа.";
+  }
+
+  return `${shortLine(withoutRepeatedName, 145)}.`
+    .replace(/\.\.+$/u, ".")
+    .replace(/\s+\./u, ".");
+};
+
+const groupedMentions = (
   article: ArticleData,
-  title: string,
+): Record<ArticleCardCategory, ArticleCardMention[]> => {
+  const groups: Record<ArticleCardCategory, ArticleCardMention[]> = {
+    "best-legendary": [],
+    "situational-legendary": [],
+    "best-epic": [],
+    "situational-epic": [],
+    "last-year": [],
+    other: [],
+  };
+
+  for (const mention of article.cardMentions || []) {
+    groups[mention.category]?.push(mention);
+  }
+
+  for (const category of CATEGORY_ORDER) {
+    groups[category].sort((a, b) => a.order - b.order);
+  }
+
+  return groups;
+};
+
+const splitGroup = (
+  mentions: ArticleCardMention[],
+  firstSize: number,
+): [ArticleCardMention[], ArticleCardMention[]] => {
+  return [mentions.slice(0, firstSize), mentions.slice(firstSize)];
+};
+
+const makeCardNarration = (draft: DraftScene): string => {
+  if (draft.includeReasons === false || draft.mentions.length === 0) {
+    return cleanText(draft.lead);
+  }
+
+  const detailedMentions = draft.mentions.slice(0, 3);
+  const remainingMentions = draft.mentions.slice(3);
+  const points = detailedMentions
+    .map((mention) => `${mention.name}: ${reasonFromMention(mention)}`)
+    .join(" ");
+  const remaining = remainingMentions.length
+    ? `Также в группе: ${cardNameList(remainingMentions, 4)}.`
+    : "";
+
+  return cleanText(`${draft.lead} ${points} ${remaining}`);
+};
+
+const makeCardBeats = (
+  draft: DraftScene,
   sceneIndex: number,
-): string => {
-  if (sceneIndex === 0) {
-    return article.title.toLowerCase().includes("крафт")
-      ? "Что крафтить?"
-      : "Главный вопрос";
+): string[] => {
+  if (draft.beats?.length) {
+    return draft.beats;
   }
 
-  return normalizeHeading(title, sceneIndex);
+  const names = draft.mentions.map((mention) => mention.name);
+  if (names.length === 0) {
+    return sceneIndex === 0
+      ? ["Разбираем только крафт", "Без лишнего пересказа"]
+      : ["Смотри на архетип", "Не трать пыль вслепую"];
+  }
+
+  return [
+    shortLine(names.slice(0, 2).join(" + "), 54),
+    shortLine(names.slice(2, 5).join(" / "), 54),
+  ].filter(Boolean);
 };
 
-const makeBeats = (headline: string, text: string, sceneIndex: number): string[] => {
-  const lower = headline.toLowerCase();
-  if (sceneIndex === 0) {
-    return ["Не все легендарки стоят пыли", "Сначала смотри на мету"];
-  }
-  if (lower.includes("легендар")) {
-    return ["Крафт только под колоду", "Проверяй долгий потенциал"];
-  }
-  if (lower.includes("эпич")) {
-    return ["Сильные карты не всегда срочные", "Пыль тратить точечно"];
-  }
-  if (lower.includes("вердикт")) {
-    return ["Не крафти все подряд", "Выбери 1-2 архетипа"];
-  }
-  if (lower.includes("хайп") || lower.includes("мета")) {
-    return ["Первые дни часто обманывают", "Дождись стабильной меты"];
-  }
-
-  const sentences = splitSentences(text);
-  const picked = sentences
-    .map((sentence) => shortLine(sentence, 54))
-    .filter((sentence) => sentence.length >= 12)
-    .slice(0, 2);
-
-  if (picked.length > 0) {
-    return picked;
-  }
-
-  return sceneIndex % 2 === 0
-    ? ["Не трать пыль вслепую", "Сначала проверь мету"]
-    : ["Выбирай архетип", "Крафти только основу"];
-};
-
-const sceneNarration = (
+const makeScene = (
   article: ArticleData,
-  sectionText: string,
+  draft: DraftScene,
   sceneIndex: number,
-  maxChars: number,
-): string => {
-  const base = clampText(sectionText, maxChars);
-  if (sceneIndex === 0) {
-    return cleanText(
-      `Разбираем гайд Manacost по крафту после Катаклизма. Цель простая: понять, где пыль действительно дает силу, а где лучше подождать первых мета-отчетов. ${base}`,
-    );
-  }
+): VideoScene => {
+  const narration = makeCardNarration(draft);
+  const durationSeconds = Math.max(12, estimateSpeechSeconds(narration) + 1);
+  const cardNames = draft.mentions.map((mention) => mention.name);
+  const cardIds = draft.mentions
+    .map((mention) => mention.cardId)
+    .filter(Boolean) as string[];
+  const keywords = Array.from(
+    new Set([
+      ...cardNames,
+      ...cardIds,
+      ...extractKeywords([draft.title, narration, article.title], 8),
+      ...extractTitlePhrases(draft.title, 4),
+    ]),
+  ).slice(0, 18);
 
-  return base;
+  return {
+    id: `scene-${String(sceneIndex + 1).padStart(2, "0")}-${draft.idSuffix}`,
+    title: shortLine(draft.title, 52),
+    headline: draft.headline,
+    beats: makeCardBeats(draft, sceneIndex),
+    sectionTitle: draft.mentions[0]?.sectionHeading,
+    narration,
+    onScreenText: draft.headline,
+    keywords,
+    cardNames,
+    cardIds,
+    assetIds: [],
+    durationSeconds,
+    captions: captionsFromText(narration, durationSeconds),
+  };
 };
 
-const sectionChunks = (article: ArticleData, targetSceneCount: number): string[] => {
-  const sourceSections =
-    article.sections.length > 0
-      ? article.sections
-      : [{ heading: "Главное", text: article.text }];
-  const chunks: string[] = [];
+const buildCardScenes = (article: ArticleData): DraftScene[] => {
+  const groups = groupedMentions(article);
+  const [bestLegendaryCore, bestLegendarySupport] = splitGroup(
+    groups["best-legendary"],
+    4,
+  );
+  const [situationalLegendaryPlayable, situationalLegendaryCaution] = splitGroup(
+    groups["situational-legendary"],
+    4,
+  );
+  const [bestEpicCore, bestEpicSupport] = splitGroup(groups["best-epic"], 5);
+  const [situationalEpicCore] = splitGroup(groups["situational-epic"], 6);
+  const lastYear = groups["last-year"].slice(0, 2);
+  const introCards = [
+    ...bestLegendaryCore.slice(0, 2),
+    ...bestEpicCore.slice(0, 2),
+  ];
 
-  for (const section of sourceSections) {
-    const sentences = splitSentences(section.text);
-    if (sentences.length <= 5) {
-      chunks.push(section.text);
-      continue;
-    }
+  const drafts: DraftScene[] = [
+    {
+      idSuffix: "intro",
+      title: "Что реально крафтить",
+      headline: "Крафт без мусора",
+      lead:
+        "Это короткий разбор гайда по крафту КАТАКЛИЗМА. Не пересказываем всю статью: идем по картам, которые прямо влияют на колоды, и отдельно отмечаем позиции, где лучше не спешить.",
+      mentions: introCards,
+      beats: ["Только конкретные карты", "Сначала сила, потом риск"],
+      includeReasons: false,
+    },
+  ];
 
-    for (let index = 0; index < sentences.length; index += 5) {
-      chunks.push(sentences.slice(index, index + 5).join(" "));
-    }
+  if (bestLegendaryCore.length > 0) {
+    drafts.push({
+      idSuffix: "best-legendaries-core",
+      title: "Лучшие легендарки: ядро меты",
+      headline: "Главные легендарки",
+      lead: `В верхнем приоритете ${cardNameList(bestLegendaryCore)}. Это не косметические крафты, а карты, вокруг которых держится сила архетипов.`,
+      mentions: bestLegendaryCore,
+    });
   }
 
-  return chunks.slice(0, Math.max(targetSceneCount, 5));
+  if (bestLegendarySupport.length > 0) {
+    drafts.push({
+      idSuffix: "best-legendaries-archetypes",
+      title: "Легендарки под конкретную колоду",
+      headline: "Крафт под архетип",
+      lead: `Следующая группа сильная, но ее стоит крафтить только под выбранную колоду: ${cardNameList(bestLegendarySupport, 5)}.`,
+      mentions: bestLegendarySupport.slice(0, 5),
+    });
+  }
+
+  if (situationalLegendaryPlayable.length > 0) {
+    drafts.push({
+      idSuffix: "situational-legendaries-playable",
+      title: "Ситуативные легендарки с потенциалом",
+      headline: "Можно, но точечно",
+      lead: `Эти легендарки не универсальны. Их берут, когда уже есть подходящая сборка: ${cardNameList(situationalLegendaryPlayable)}.`,
+      mentions: situationalLegendaryPlayable,
+    });
+  }
+
+  if (situationalLegendaryCaution.length > 0) {
+    drafts.push({
+      idSuffix: "situational-legendaries-caution",
+      title: "Легендарки, где лучше подождать",
+      headline: "Пыль на паузу",
+      lead: `Здесь главный риск — слабый или нестабильный архетип. Без любви к конкретной колоде эти карты лучше не ставить в первый крафт.`,
+      mentions: situationalLegendaryCaution.slice(0, 5),
+    });
+  }
+
+  if (bestEpicCore.length > 0) {
+    drafts.push({
+      idSuffix: "best-epics-core",
+      title: "Лучшие эпики КАТАКЛИЗМА",
+      headline: "Эпики с отдачей",
+      lead: `Среди эпиков быстрее всего окупаются ${cardNameList(bestEpicCore, 5)}. Они чаще попадают в реальные списки и дают понятную игровую роль.`,
+      mentions: bestEpicCore,
+    });
+  }
+
+  if (bestEpicSupport.length > 0) {
+    drafts.push({
+      idSuffix: "best-epics-support",
+      title: "Эпики для стабильных сборок",
+      headline: "Второй эшелон",
+      lead: `Эти эпики не всегда первые в очереди, но хорошо работают, если вы уже играете нужный класс или контрольную сборку.`,
+      mentions: bestEpicSupport.slice(0, 5),
+    });
+  }
+
+  if (situationalEpicCore.length > 0) {
+    drafts.push({
+      idSuffix: "situational-epics",
+      title: "Ситуативные эпики",
+      headline: "Не автокрафт",
+      lead:
+        "Финальная группа выглядит сильной на бумаге, но зависит от слабых или узких архетипов. Здесь крафт оправдан только под готовый план игры.",
+      mentions: situationalEpicCore,
+    });
+  }
+
+  drafts.push({
+    idSuffix: "verdict",
+    title: "Финальный вердикт",
+    headline: "Итог по пыли",
+    lead:
+      "Главное правило простое: сначала крафтите карты, которые открывают целую колоду, а не одиночные красивые легендарки. Если архетип вам не интересен, даже сильная карта легко превращается в дорогой запас на потом.",
+    mentions: [...bestLegendaryCore.slice(0, 2), ...bestEpicCore.slice(0, 2), ...lastYear],
+    beats: ["Крафт под колоду", "Ситуативное — после тестов"],
+    includeReasons: false,
+  });
+
+  return drafts.filter((draft) => draft.lead || draft.mentions.length > 0);
+};
+
+const buildFallbackScenes = (article: ArticleData): DraftScene[] => {
+  const sections = article.sections.length
+    ? article.sections
+    : [{ heading: "Главное", text: article.text }];
+
+  return [
+    {
+      idSuffix: "intro",
+      title: "Главное",
+      headline: "Быстрый разбор",
+      lead: shortLine(article.description || article.title, 260),
+      mentions: [],
+    },
+    ...sections.slice(0, 5).map((section, index) => ({
+      idSuffix: `section-${index + 1}`,
+      title: section.heading,
+      headline: shortLine(section.heading, 30),
+      lead: shortLine(section.text, 320),
+      mentions: [],
+    })),
+  ];
 };
 
 export const buildScenes = (
@@ -166,78 +356,13 @@ export const buildScenes = (
   options: BuildSceneOptions = {},
 ): VideoScene[] => {
   const targetMinutes = options.targetMinutes || DEFAULT_TARGET_MINUTES;
-  const targetSceneCount = Math.min(8, Math.max(6, Math.round(targetMinutes * 1.7)));
-  const chunks = sectionChunks(article, targetSceneCount - 2);
-  const selectedChunks = chunks.slice(0, targetSceneCount - 2);
-  const scenes: VideoScene[] = [];
-
-  const introText = sceneNarration(
-    article,
-    selectedChunks[0] || article.text,
-    0,
-    430,
-  );
-  scenes.push(makeScene(article, "scene-01-intro", "Что крафтить?", introText, 0));
-
-  selectedChunks.forEach((chunk, index) => {
-    const section = article.sections[index % Math.max(1, article.sections.length)];
-    const narration = sceneNarration(article, chunk, index + 1, 560);
-    scenes.push(
-      makeScene(
-        article,
-        `scene-${String(index + 2).padStart(2, "0")}`,
-        section?.heading || FALLBACK_HOOKS[(index + 1) % FALLBACK_HOOKS.length],
-        narration,
-        index + 1,
-      ),
-    );
-  });
-
-  const keywords = extractKeywords([article.title, article.text], 5).join(", ");
-  const outroText = cleanText(
-    `Финальный вывод: не крафтите все подряд. Выберите один-два архетипа, дождитесь первых мета-сигналов и тратьте пыль только на карты, которые реально держат колоду. Главные ориентиры: ${keywords}.`,
-  );
-  scenes.push(
-    makeScene(
-      article,
-      `scene-${String(scenes.length + 1).padStart(2, "0")}-outro`,
-      "Финальный вердикт",
-      outroText,
-      scenes.length,
-    ),
-  );
+  const drafts =
+    (article.cardMentions || []).length > 0
+      ? buildCardScenes(article)
+      : buildFallbackScenes(article);
+  const scenes = drafts.map((draft, index) => makeScene(article, draft, index));
 
   return normalizeSceneDurations(scenes, targetMinutes);
-};
-
-const makeScene = (
-  article: ArticleData,
-  id: string,
-  title: string,
-  narration: string,
-  sceneIndex: number,
-): VideoScene => {
-  const headline = makeHeadline(article, title, sceneIndex);
-  const durationSeconds = estimateSpeechSeconds(narration) + 2;
-  const keywords = Array.from(
-    new Set([
-      ...extractKeywords([title, narration, article.title], 10),
-      ...extractTitlePhrases(title, 4),
-    ]),
-  ).slice(0, 12);
-
-  return {
-    id,
-    title: sceneTitle(title),
-    headline,
-    beats: makeBeats(headline, narration, sceneIndex),
-    narration,
-    onScreenText: headline,
-    keywords,
-    assetIds: [],
-    durationSeconds,
-    captions: captionsFromText(narration, durationSeconds),
-  };
 };
 
 const normalizeSceneDurations = (
@@ -245,18 +370,15 @@ const normalizeSceneDurations = (
   targetMinutes: number,
 ): VideoScene[] => {
   const currentSeconds = scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
-  const targetSeconds = Math.min(
-    DEFAULT_MAX_MINUTES * 60,
-    Math.max(DEFAULT_MIN_MINUTES * 60, targetMinutes * 60),
-  );
-  const multiplier = targetSeconds / Math.max(1, currentSeconds);
+  const maxTargetSeconds = Math.min(DEFAULT_MAX_MINUTES * 60, targetMinutes * 70);
 
-  if (multiplier > 0.85 && multiplier < 1.2) {
+  if (currentSeconds <= maxTargetSeconds) {
     return scenes;
   }
 
+  const multiplier = maxTargetSeconds / Math.max(1, currentSeconds);
   return scenes.map((scene) => {
-    const durationSeconds = Math.max(16, Math.round(scene.durationSeconds * multiplier));
+    const durationSeconds = Math.max(10, Math.round(scene.durationSeconds * multiplier));
     return {
       ...scene,
       durationSeconds,

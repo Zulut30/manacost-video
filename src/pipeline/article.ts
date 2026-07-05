@@ -1,7 +1,13 @@
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import { cleanText, makeSlug } from "./text";
-import type { ArticleData, ArticleImage, ArticleSection } from "./types";
+import type {
+  ArticleCardCategory,
+  ArticleCardMention,
+  ArticleData,
+  ArticleImage,
+  ArticleSection,
+} from "./types";
 
 const getMeta = (document: Document, selectors: string[]): string | undefined => {
   for (const selector of selectors) {
@@ -126,6 +132,124 @@ const collectSections = (articleDocument: Document): ArticleSection[] => {
   return sections.filter((section) => section.text.length > 80);
 };
 
+const normalizeMatchText = (value: string): string => {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/ё/gu, "е")
+    .replace(/[’'`]/gu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+};
+
+const cardCategoryFromHeading = (heading: string): ArticleCardCategory => {
+  const normalized = normalizeMatchText(heading);
+  if (normalized.includes("прошлого года")) {
+    return "last-year";
+  }
+  if (normalized.includes("лучшие") && normalized.includes("легендар")) {
+    return "best-legendary";
+  }
+  if (normalized.includes("ситуативные") && normalized.includes("легендар")) {
+    return "situational-legendary";
+  }
+  if (normalized.includes("лучшие") && normalized.includes("эпичес")) {
+    return "best-epic";
+  }
+  if (normalized.includes("ситуативные") && normalized.includes("эпичес")) {
+    return "situational-epic";
+  }
+  return "other";
+};
+
+const cardIdFromImageUrl = (url: string | undefined): string | undefined => {
+  if (!url) {
+    return undefined;
+  }
+
+  try {
+    const pathname = new URL(url).pathname;
+    const filename = pathname.split("/").pop() || "";
+    return filename.replace(/\.(png|jpg|jpeg|webp)$/iu, "") || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const mentionRarity = (element: Element): string | undefined => {
+  const className = element.getAttribute("class") || "";
+  return className.match(/\bhs-rarity-([a-z-]+)/iu)?.[1];
+};
+
+const isPrimaryTooltip = (paragraphText: string, cardName: string): boolean => {
+  const prefix = cleanText(paragraphText.split(/\s+[—–-]\s+/u)[0] || paragraphText);
+  const normalizedPrefix = normalizeMatchText(prefix);
+  const normalizedName = normalizeMatchText(cardName);
+  return normalizedName.length > 2 && normalizedPrefix.includes(normalizedName);
+};
+
+const collectCardMentions = (
+  articleDocument: Document,
+  baseUrl: string,
+): ArticleCardMention[] => {
+  const mentions: ArticleCardMention[] = [];
+  const seen = new Set<string>();
+  let heading = "Главное";
+
+  for (const node of Array.from(
+    articleDocument.querySelectorAll("h2,h3,p,li,blockquote"),
+  )) {
+    const tagName = node.tagName.toLowerCase();
+    const text = cleanText(node.textContent || "");
+    if (!text) {
+      continue;
+    }
+
+    if (tagName === "h2" || tagName === "h3") {
+      heading = text;
+      continue;
+    }
+
+    const tooltipNodes = Array.from(node.querySelectorAll(".hs-card-tooltip"));
+    if (tooltipNodes.length === 0) {
+      continue;
+    }
+
+    for (const tooltip of tooltipNodes) {
+      const name = cleanText(tooltip.textContent || "");
+      if (!isPrimaryTooltip(text, name)) {
+        continue;
+      }
+
+      const rawImageUrl =
+        tooltip.getAttribute("data-image-raw") ||
+        tooltip.getAttribute("data-image") ||
+        undefined;
+      const imageUrl = resolveUrl(rawImageUrl || "", baseUrl);
+      const cardId = cardIdFromImageUrl(imageUrl);
+      const key = normalizeMatchText(cardId || name);
+      if (!key || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      mentions.push({
+        id: `card-mention-${String(mentions.length + 1).padStart(2, "0")}`,
+        name,
+        cardId,
+        imageUrl,
+        rarity: mentionRarity(tooltip),
+        sectionHeading: heading,
+        category: cardCategoryFromHeading(heading),
+        text,
+        order: mentions.length,
+      });
+    }
+  }
+
+  return mentions;
+};
+
 export const fetchArticle = async (url: string): Promise<ArticleData> => {
   const response = await fetch(url, {
     headers: {
@@ -139,32 +263,40 @@ export const fetchArticle = async (url: string): Promise<ArticleData> => {
   }
 
   const html = await response.text();
+  const rawDom = new JSDOM(html, { url });
   const dom = new JSDOM(html, { url });
   const readable = new Readability(dom.window.document).parse();
   const articleHtml = readable?.content || dom.window.document.body.innerHTML;
   const articleDom = new JSDOM(articleHtml, { url });
   const articleDocument = articleDom.window.document;
+  const rawArticleRoot =
+    rawDom.window.document.querySelector(".td-post-content") ||
+    rawDom.window.document.querySelector("article") ||
+    rawDom.window.document.body;
+  const rawArticleDom = new JSDOM(rawArticleRoot.innerHTML, { url });
+  const rawArticleDocument = rawArticleDom.window.document;
 
   const title =
     cleanText(readable?.title || "") ||
-    getMeta(dom.window.document, ['meta[property="og:title"]', "title"]) ||
+    getMeta(rawDom.window.document, ['meta[property="og:title"]', "title"]) ||
     new URL(url).pathname;
   const description =
     readable?.excerpt ||
-    getMeta(dom.window.document, [
+    getMeta(rawDom.window.document, [
       'meta[name="description"]',
       'meta[property="og:description"]',
     ]);
-  const siteName = getMeta(dom.window.document, ['meta[property="og:site_name"]']);
-  const author = getMeta(dom.window.document, [
+  const siteName = getMeta(rawDom.window.document, ['meta[property="og:site_name"]']);
+  const author = getMeta(rawDom.window.document, [
     'meta[name="author"]',
     'meta[property="article:author"]',
   ]);
-  const publishedAt = getMeta(dom.window.document, [
+  const publishedAt = getMeta(rawDom.window.document, [
     'meta[property="article:published_time"]',
     'meta[name="date"]',
   ]);
   const sections = collectSections(articleDocument);
+  const cardMentions = collectCardMentions(rawArticleDocument, url);
   const text =
     cleanText(readable?.textContent || "") ||
     cleanText(sections.map((section) => section.text).join(" "));
@@ -179,6 +311,7 @@ export const fetchArticle = async (url: string): Promise<ArticleData> => {
     publishedAt,
     text,
     sections,
-    images: collectImages(dom.window.document, articleDocument, url),
+    cardMentions,
+    images: collectImages(rawDom.window.document, articleDocument, url),
   };
 };

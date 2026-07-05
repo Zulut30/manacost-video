@@ -12,6 +12,7 @@ export const sampleManifest: PipelineManifest = {
     description: "Черновой предпросмотр шаблона ролика.",
     text: "Тестовый ролик для проверки композиции.",
     sections: [],
+    cardMentions: [],
     images: [],
   },
   target: {

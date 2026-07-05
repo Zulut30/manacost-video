@@ -9,7 +9,7 @@ export const DEFAULT_WIDTH = 2560;
 export const DEFAULT_HEIGHT = 1440;
 export const DEFAULT_FPS = Number(process.env.VIDEO_FPS || 30);
 export const DEFAULT_TARGET_MINUTES = Number(
-  process.env.VIDEO_TARGET_MINUTES || 4,
+  process.env.VIDEO_TARGET_MINUTES || 3.25,
 );
 export const DEFAULT_MIN_MINUTES = 3;
 export const DEFAULT_MAX_MINUTES = 5;

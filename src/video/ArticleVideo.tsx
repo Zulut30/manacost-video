@@ -86,9 +86,14 @@ const SceneView: React.FC<{
     .map((id) => manifest.assets.find((asset) => asset.id === id))
     .filter(Boolean) as PipelineAsset[];
   const backgroundAsset = sceneAssets.find(isUsableBackgroundAsset);
-  const foregroundAssets = sceneAssets.filter(
+  const orderedForegroundAssets = sceneAssets.filter(
     (asset) => asset.kind === "image" && asset.id !== backgroundAsset?.id,
-  ).sort((a, b) => visualPriority(b) - visualPriority(a));
+  );
+  const hasExplicitCards =
+    (scene.cardIds?.length || 0) > 0 || (scene.cardNames?.length || 0) > 0;
+  const foregroundAssets = hasExplicitCards
+    ? orderedForegroundAssets
+    : [...orderedForegroundAssets].sort((a, b) => visualPriority(b) - visualPriority(a));
   const accent = sceneIndex % 2 === 0 ? "#f0b744" : "#58c7de";
   const fadeIn = interpolate(frame, [0, fps * 0.65], [0, 1], {
     extrapolateLeft: "clamp",
@@ -233,9 +238,11 @@ const SceneView: React.FC<{
       </div>
 
       <CinematicVisuals
-        assets={foregroundAssets.slice(0, 4)}
+        assets={foregroundAssets}
         accent={accent}
         progress={progress}
+        frame={frame}
+        durationInFrames={durationInFrames}
       />
       <ProgressBar progress={progress} accent={accent} />
     </AbsoluteFill>
@@ -406,16 +413,30 @@ const CinematicVisuals: React.FC<{
   assets: PipelineAsset[];
   accent: string;
   progress: number;
-}> = ({ assets, accent, progress }) => {
+  frame: number;
+  durationInFrames: number;
+}> = ({ assets, accent, progress, frame, durationInFrames }) => {
   if (assets.length === 0) {
     return null;
   }
 
-  const featured = assets[0];
+  const activeIndex = Math.min(
+    assets.length - 1,
+    Math.floor(progress * assets.length * 0.98),
+  );
+  const featured = assets[activeIndex];
   const featuredAspect = assetAspect(featured);
   const featuredIsWide = featuredAspect > 1.18;
-  const float = Math.sin(progress * Math.PI) * -24;
-  const rotate = interpolate(progress, [0, 1], [-1.2, 1.1]);
+  const localFrame = frame - Math.floor((durationInFrames / assets.length) * activeIndex);
+  const reveal = interpolate(localFrame, [0, 0.35 * 30], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.bezier(0.16, 1, 0.3, 1),
+  });
+  const float = Math.sin(progress * Math.PI * 2) * -18;
+  const rotate = interpolate(progress, [0, 1], [-0.8, 0.9]);
+  const cardScale = interpolate(reveal, [0, 1], [0.94, 1]);
+  const reelAssets = assets.slice(0, 8);
 
   return (
     <div
@@ -427,6 +448,14 @@ const CinematicVisuals: React.FC<{
         height: 1280,
       }}
     >
+      {assets.length > 1 ? (
+        <CardReel
+          assets={reelAssets}
+          activeIndex={activeIndex}
+          accent={accent}
+          frame={frame}
+        />
+      ) : null}
       <div
         style={{
           position: "absolute",
@@ -439,7 +468,8 @@ const CinematicVisuals: React.FC<{
           boxShadow: "0 54px 120px rgba(0,0,0,0.74)",
           overflow: "hidden",
           padding: featuredIsWide ? 0 : 0,
-          transform: `translateY(${float}px) rotate(${rotate}deg)`,
+          transform: `translateY(${float + (1 - reveal) * 42}px) rotate(${rotate}deg) scale(${cardScale})`,
+          opacity: reveal,
         }}
       >
         <Img
@@ -471,6 +501,99 @@ const CinematicVisuals: React.FC<{
       >
         {featured.title}
       </div>
+      {assets.length > 1 ? (
+        <div
+          style={{
+            position: "absolute",
+            left: 218,
+            bottom: 36,
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+          }}
+        >
+          {assets.map((asset, index) => (
+            <div
+              key={asset.id}
+              style={{
+                width: index === activeIndex ? 74 : 48,
+                height: 8,
+                backgroundColor:
+                  index === activeIndex ? accent : "rgba(255,255,255,0.22)",
+              }}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+const CardReel: React.FC<{
+  assets: PipelineAsset[];
+  activeIndex: number;
+  accent: string;
+  frame: number;
+}> = ({ assets, activeIndex, accent, frame }) => {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 0,
+        top: 82,
+        width: 156,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+      }}
+    >
+      {assets.map((asset, index) => {
+        const isActive = index === activeIndex;
+        const pulse = isActive ? 1 + Math.sin(frame / 8) * 0.015 : 1;
+        const entrance = interpolate(
+          frame,
+          [index * 3, index * 3 + 12],
+          [0, 1],
+          {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+            easing: Easing.bezier(0.16, 1, 0.3, 1),
+          },
+        );
+
+        return (
+          <div
+            key={asset.id}
+            style={{
+              position: "relative",
+              width: isActive ? 148 : 126,
+              height: isActive ? 204 : 174,
+              border: `3px solid ${isActive ? accent : "rgba(255,255,255,0.18)"}`,
+              backgroundColor: "rgba(0,0,0,0.56)",
+              boxShadow: isActive
+                ? `0 18px 46px rgba(0,0,0,0.52), 0 0 32px ${accent}55`
+                : "0 14px 32px rgba(0,0,0,0.42)",
+              overflow: "hidden",
+              opacity: interpolate(entrance, [0, 1], [0, isActive ? 1 : 0.74]),
+              transform: `translateX(${(1 - entrance) * -36}px) scale(${pulse}) rotate(${
+                isActive ? -1.2 : index % 2 === 0 ? 1.8 : -1.8
+              }deg)`,
+            }}
+          >
+            <Img
+              src={staticFile(asset.path)}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+                filter: isActive
+                  ? "saturate(1.08) contrast(1.04)"
+                  : "saturate(0.8) contrast(0.9) brightness(0.74)",
+              }}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 };
