@@ -169,10 +169,27 @@ const makeCardBeats = (
       : ["Смотри на архетип", "Не трать пыль вслепую"];
   }
 
-  return [
-    shortLine(names.slice(0, 2).join(" + "), 54),
-    shortLine(names.slice(2, 5).join(" / "), 54),
-  ].filter(Boolean);
+  const text = normalizeText(`${draft.title} ${draft.headline}`);
+  if (text.includes("главные") || text.includes("ядро")) {
+    return ["Крафтить сейчас", "Карты держат архетип"];
+  }
+  if (text.includes("архетип")) {
+    return ["Только под колоду", "Сначала выбери сборку"];
+  }
+  if (text.includes("точечно") || text.includes("потенциал")) {
+    return ["Можно, но не всем", "Проверяй готовую сборку"];
+  }
+  if (text.includes("пауза") || text.includes("подождать")) {
+    return ["Не первый крафт", "Риск слабой меты"];
+  }
+  if (text.includes("эпики") || text.includes("отдач")) {
+    return ["Больше пользы за пыль", "Чаще входят в списки"];
+  }
+  if (text.includes("автокрафт") || text.includes("ситуатив")) {
+    return ["Не автокрафт", "Только под план игры"];
+  }
+
+  return ["Смотри на архетип", "Крафти по роли карты"];
 };
 
 const makeScene = (

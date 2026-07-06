@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Caption } from "@remotion/captions";
 import { OUTPUT_DIR, RUNS_PUBLIC_DIR } from "./constants";
 import { ensureDir, readJson, writeJson, writeText } from "./fs";
 import { toSrt } from "./subtitles";
@@ -29,9 +30,27 @@ export const saveManifestArtifacts = (manifest: PipelineManifest): void => {
   writeText(scriptPath(manifest.slug), scriptMarkdown(updatedManifest));
   writeText(
     subtitlesPath(manifest.slug),
-    toSrt(updatedManifest.scenes.flatMap((scene) => scene.captions)),
+    toSrt(globalCaptions(updatedManifest)),
   );
   writeJson(renderReportPath(manifest.slug), updatedManifest.render || { warnings: [] });
+};
+
+const globalCaptions = (manifest: PipelineManifest): Caption[] => {
+  let offsetMs = 0;
+  const captions: Caption[] = [];
+
+  for (const scene of manifest.scenes) {
+    for (const caption of scene.captions) {
+      captions.push({
+        ...caption,
+        startMs: caption.startMs + offsetMs,
+        endMs: caption.endMs + offsetMs,
+      });
+    }
+    offsetMs += Math.round(scene.durationSeconds * 1000);
+  }
+
+  return captions;
 };
 
 export const loadManifest = (slugOrPath: string): PipelineManifest => {

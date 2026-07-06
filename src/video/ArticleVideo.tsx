@@ -94,6 +94,13 @@ const SceneView: React.FC<{
   const foregroundAssets = hasExplicitCards
     ? orderedForegroundAssets
     : [...orderedForegroundAssets].sort((a, b) => visualPriority(b) - visualPriority(a));
+  const activeVisualIndex = getActiveVisualIndex(
+    foregroundAssets.length,
+    frame,
+    durationInFrames,
+    fps,
+  );
+  const activeVisualAsset = foregroundAssets[activeVisualIndex];
   const accent = sceneIndex % 2 === 0 ? "#f0b744" : "#58c7de";
   const fadeIn = interpolate(frame, [0, fps * 0.65], [0, 1], {
     extrapolateLeft: "clamp",
@@ -110,9 +117,10 @@ const SceneView: React.FC<{
   return (
     <AbsoluteFill>
       <VisualBackground
-        asset={backgroundAsset}
+        asset={backgroundAsset || activeVisualAsset}
         progress={progress}
         sceneIndex={sceneIndex}
+        isCardBackground={!backgroundAsset && Boolean(activeVisualAsset)}
       />
       <div
         style={{
@@ -123,6 +131,13 @@ const SceneView: React.FC<{
         }}
       />
       <AccentRails accent={accent} progress={progress} />
+      <SceneImpact
+        accent={accent}
+        frame={frame}
+        fps={fps}
+        sceneIndex={sceneIndex}
+        headline={headline}
+      />
 
       <div
         style={{
@@ -242,7 +257,16 @@ const SceneView: React.FC<{
         accent={accent}
         progress={progress}
         frame={frame}
+        fps={fps}
         durationInFrames={durationInFrames}
+        activeIndex={activeVisualIndex}
+        sceneTitle={scene.title}
+      />
+      <AnimatedSubtitles
+        scene={scene}
+        frame={frame}
+        fps={fps}
+        accent={accent}
       />
       <ProgressBar progress={progress} accent={accent} />
     </AbsoluteFill>
@@ -296,8 +320,9 @@ const VisualBackground: React.FC<{
   asset?: PipelineAsset;
   progress: number;
   sceneIndex: number;
-}> = ({ asset, progress, sceneIndex }) => {
-  const scale = 1.05 + progress * 0.08;
+  isCardBackground?: boolean;
+}> = ({ asset, progress, sceneIndex, isCardBackground = false }) => {
+  const scale = isCardBackground ? 3.1 + progress * 0.24 : 1.05 + progress * 0.08;
   const x = (sceneIndex % 3) * 16 - progress * 38;
   const y = sceneIndex % 2 === 0 ? progress * -14 : progress * 14;
 
@@ -315,9 +340,20 @@ const VisualBackground: React.FC<{
           objectFit: "cover",
           objectPosition: "center",
           transform: `scale(${scale}) translate(${x}px, ${y}px)`,
-          filter: "saturate(1.08) contrast(1.06) brightness(0.72)",
+          filter: isCardBackground
+            ? "blur(34px) saturate(1.18) contrast(1.12) brightness(0.34)"
+            : "saturate(1.08) contrast(1.06) brightness(0.72)",
+          opacity: isCardBackground ? 0.58 : 1,
         }}
       />
+      {isCardBackground ? (
+        <AbsoluteFill
+          style={{
+            background:
+              "radial-gradient(circle at 72% 42%, rgba(0,0,0,0.18), rgba(0,0,0,0.82) 62%), linear-gradient(90deg, rgba(0,0,0,0.82), rgba(0,0,0,0.24))",
+          }}
+        />
+      ) : null}
     </AbsoluteFill>
   );
 };
@@ -409,34 +445,221 @@ const AccentRails: React.FC<{
   );
 };
 
+const SceneImpact: React.FC<{
+  accent: string;
+  frame: number;
+  fps: number;
+  sceneIndex: number;
+  headline: string;
+}> = ({ accent, frame, fps, sceneIndex, headline }) => {
+  const opacity = interpolate(frame, [0, 0.08 * fps, 0.46 * fps], [0, 0.72, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.bezier(0.16, 1, 0.3, 1),
+  });
+  const slide = interpolate(frame, [0, 0.42 * fps], [-360, 260], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.bezier(0.16, 1, 0.3, 1),
+  });
+  const numberScale = interpolate(frame, [0, 0.22 * fps], [0.88, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.bezier(0.16, 1, 0.3, 1),
+  });
+
+  return (
+    <AbsoluteFill style={{ pointerEvents: "none", opacity }}>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundColor: "rgba(255,255,255,0.10)",
+          mixBlendMode: "screen",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          left: slide,
+          top: -140,
+          width: 420,
+          height: 1720,
+          backgroundColor: accent,
+          transform: "rotate(16deg)",
+          opacity: 0.9,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          left: 130,
+          bottom: 176,
+          color: "rgba(255,247,223,0.90)",
+          fontSize: 152,
+          lineHeight: 0.82,
+          fontWeight: 950,
+          letterSpacing: 0,
+          transform: `scale(${numberScale})`,
+          textShadow: "0 30px 80px rgba(0,0,0,0.70)",
+        }}
+      >
+        {String(sceneIndex + 1).padStart(2, "0")}
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          left: 370,
+          bottom: 190,
+          maxWidth: 780,
+          color: "#fff7df",
+          fontSize: 52,
+          lineHeight: 0.95,
+          fontWeight: 920,
+          textTransform: "uppercase",
+          textShadow: "0 18px 54px rgba(0,0,0,0.70)",
+        }}
+      >
+        {headline}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const AnimatedSubtitles: React.FC<{
+  scene: VideoScene;
+  frame: number;
+  fps: number;
+  accent: string;
+}> = ({ scene, frame, fps, accent }) => {
+  const caption = scene.captions.find((item) => {
+    const startFrame = Math.floor((item.startMs / 1000) * fps);
+    const endFrame = Math.ceil((item.endMs / 1000) * fps);
+    return frame >= startFrame && frame < endFrame;
+  });
+
+  if (!caption) {
+    return null;
+  }
+
+  const startFrame = Math.floor((caption.startMs / 1000) * fps);
+  const endFrame = Math.max(startFrame + 1, Math.ceil((caption.endMs / 1000) * fps));
+  const localFrame = frame - startFrame;
+  const framesLeft = endFrame - frame;
+  const enter = interpolate(localFrame, [0, 0.22 * fps], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.bezier(0.16, 1, 0.3, 1),
+  });
+  const exit = interpolate(framesLeft, [0, 0.18 * fps], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const opacity = Math.min(enter, exit);
+  const progress = interpolate(frame, [startFrame, endFrame], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const words = caption.text.split(/\s+/u).filter(Boolean);
+  const activeWordIndex = Math.min(
+    words.length - 1,
+    Math.max(0, Math.floor(progress * words.length)),
+  );
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 128,
+        bottom: 78,
+        width: 1500,
+        minHeight: 132,
+        padding: "26px 34px 28px",
+        backgroundColor: "rgba(0,0,0,0.80)",
+        borderLeft: `9px solid ${accent}`,
+        boxShadow: "0 26px 80px rgba(0,0,0,0.58)",
+        opacity,
+        transform: `translateY(${(1 - enter) * 32}px) scale(${0.985 + enter * 0.015})`,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          bottom: 0,
+          width: `${Math.round(progress * 10000) / 100}%`,
+          height: 5,
+          backgroundColor: accent,
+        }}
+      />
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "8px 14px",
+          alignItems: "center",
+          color: "#fff7df",
+          fontSize: 64,
+          lineHeight: 1,
+          fontWeight: 930,
+          letterSpacing: 0,
+          textTransform: "uppercase",
+          textShadow: "0 12px 34px rgba(0,0,0,0.70)",
+        }}
+      >
+        {words.map((word, index) => {
+          const isActive = index === activeWordIndex;
+          const hasPassed = index < activeWordIndex;
+          return (
+            <span
+              key={`${word}-${index}`}
+              style={{
+                color: isActive ? accent : hasPassed ? "rgba(255,247,223,0.72)" : "#fff7df",
+                transform: `translateY(${isActive ? -4 : 0}px) scale(${isActive ? 1.06 : 1})`,
+              }}
+            >
+              {word}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const CinematicVisuals: React.FC<{
   assets: PipelineAsset[];
   accent: string;
   progress: number;
   frame: number;
+  fps: number;
   durationInFrames: number;
-}> = ({ assets, accent, progress, frame, durationInFrames }) => {
+  activeIndex: number;
+  sceneTitle: string;
+}> = ({ assets, accent, progress, frame, fps, durationInFrames, activeIndex, sceneTitle }) => {
   if (assets.length === 0) {
     return null;
   }
 
-  const activeIndex = Math.min(
-    assets.length - 1,
-    Math.floor(progress * assets.length * 0.98),
-  );
   const featured = assets[activeIndex];
   const featuredAspect = assetAspect(featured);
   const featuredIsWide = featuredAspect > 1.18;
-  const localFrame = frame - Math.floor((durationInFrames / assets.length) * activeIndex);
-  const reveal = interpolate(localFrame, [0, 0.35 * 30], [0, 1], {
+  const cardCycleFrames = getCardCycleFrames(assets.length, durationInFrames, fps);
+  const cycleFrame = frame % cardCycleFrames;
+  const reveal = interpolate(cycleFrame, [0, 0.22 * fps], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.bezier(0.16, 1, 0.3, 1),
+  });
+  const swipe = interpolate(cycleFrame, [0, 0.24 * fps, 0.5 * fps], [1, 0.35, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
   });
   const float = Math.sin(progress * Math.PI * 2) * -18;
   const rotate = interpolate(progress, [0, 1], [-0.8, 0.9]);
   const cardScale = interpolate(reveal, [0, 1], [0.94, 1]);
   const reelAssets = assets.slice(0, 8);
+  const callout = calloutForScene(sceneTitle);
 
   return (
     <div
@@ -481,6 +704,41 @@ const CinematicVisuals: React.FC<{
             filter: "saturate(1.06) contrast(1.04)",
           }}
         />
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: `linear-gradient(108deg, transparent 0%, transparent ${Math.max(
+              0,
+              42 - swipe * 42,
+            )}%, ${accent}55 ${Math.max(0, 49 - swipe * 42)}%, transparent ${Math.max(
+              0,
+              58 - swipe * 42,
+            )}%, transparent 100%)`,
+            opacity: swipe,
+            mixBlendMode: "screen",
+            pointerEvents: "none",
+          }}
+        />
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          right: featuredIsWide ? 0 : 70,
+          top: featuredIsWide ? 104 : 34,
+          padding: "13px 18px",
+          backgroundColor: accent,
+          color: "#050505",
+          fontSize: 32,
+          lineHeight: 1,
+          fontWeight: 930,
+          textTransform: "uppercase",
+          boxShadow: "0 18px 44px rgba(0,0,0,0.46)",
+          transform: `translateY(${(1 - reveal) * -18}px)`,
+          opacity: reveal,
+        }}
+      >
+        {callout}
       </div>
       <div
         style={{
@@ -507,26 +765,74 @@ const CinematicVisuals: React.FC<{
             position: "absolute",
             left: 218,
             bottom: 36,
-            display: "flex",
-            gap: 12,
-            alignItems: "center",
+            width: 690,
+            height: 5,
+            backgroundColor: "rgba(255,255,255,0.14)",
           }}
         >
-          {assets.map((asset, index) => (
-            <div
-              key={asset.id}
-              style={{
-                width: index === activeIndex ? 74 : 48,
-                height: 8,
-                backgroundColor:
-                  index === activeIndex ? accent : "rgba(255,255,255,0.22)",
-              }}
-            />
-          ))}
+          <div
+            style={{
+              width: `${Math.round(((activeIndex + cycleFrame / cardCycleFrames) / assets.length) * 10000) / 100}%`,
+              height: "100%",
+              backgroundColor: accent,
+            }}
+          />
         </div>
       ) : null}
     </div>
   );
+};
+
+const getCardCycleFrames = (
+  assetCount: number,
+  durationInFrames: number,
+  fps: number,
+): number => {
+  if (assetCount <= 0) {
+    return durationInFrames;
+  }
+
+  return Math.max(
+    Math.round(1.7 * fps),
+    Math.min(Math.floor(durationInFrames / assetCount), Math.round(3.1 * fps)),
+  );
+};
+
+const getActiveVisualIndex = (
+  assetCount: number,
+  frame: number,
+  durationInFrames: number,
+  fps: number,
+): number => {
+  if (assetCount <= 0) {
+    return 0;
+  }
+
+  const cycleFrames = getCardCycleFrames(assetCount, durationInFrames, fps);
+  return Math.floor(frame / cycleFrames) % assetCount;
+};
+
+const calloutForScene = (sceneTitle: string): string => {
+  const title = sceneTitle.toLowerCase();
+  if (title.includes("ядро") || title.includes("лучшие легендар")) {
+    return "ядро меты";
+  }
+  if (title.includes("конкретную") || title.includes("архетип")) {
+    return "под колоду";
+  }
+  if (title.includes("потенциал")) {
+    return "точечный крафт";
+  }
+  if (title.includes("подождать") || title.includes("пауза")) {
+    return "не спешить";
+  }
+  if (title.includes("эпик")) {
+    return "выгодный слот";
+  }
+  if (title.includes("ситуатив")) {
+    return "по ситуации";
+  }
+  return "крафт чек";
 };
 
 const CardReel: React.FC<{
