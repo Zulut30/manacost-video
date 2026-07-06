@@ -90,7 +90,7 @@ const downloadHsDataImages = async (
   options: AssetOptions,
 ): Promise<PipelineAsset[]> => {
   const imagesDir = path.join(runPublicDir(manifest.slug), "images");
-  const maxImages = options.maxHsDataImages || 40;
+  const maxImages = options.maxHsDataImages || Math.max(40, manifest.article.cardMentions.length);
   const mentionQueue = (manifest.article.cardMentions || []).slice(0, maxImages);
   const namedQueries = Array.from(
     new Set([
@@ -244,7 +244,7 @@ const addHsCardAssets = async (params: {
   for (const card of params.cards) {
     if (
       params.seenCardIds.has(card.card_id) ||
-      params.assets.length >= (params.options.maxHsDataImages || 40)
+        params.assets.length >= (params.options.maxHsDataImages || 60)
     ) {
       continue;
     }
@@ -548,6 +548,9 @@ const linkSceneAssets = (
         ];
     const chosenBackground =
       (index === 0 && heroAsset) || backgroundMatch || fallbackBackground;
+    const sceneAssetCap = sceneHasExplicitCards
+      ? Math.max(12, Math.min(24, exactForegroundMatches.length))
+      : 5;
     const chosen = Array.from(
       new Set([
         chosenBackground?.id,
@@ -555,7 +558,7 @@ const linkSceneAssets = (
         ...keywordForegroundMatches.map((asset) => asset.id),
         ...fallbackForeground.map((asset) => asset?.id),
       ].filter(Boolean) as string[]),
-    ).slice(0, sceneHasExplicitCards ? 12 : 5);
+    ).slice(0, sceneAssetCap);
 
     return {
       ...scene,

@@ -3,6 +3,15 @@ import type { Caption } from "@remotion/captions";
 export type AssetKind = "image" | "audio";
 export type AssetSource = "article" | "hsdata" | "generated" | "local";
 export type VisualRole = "hero" | "scene" | "card" | "background" | "music";
+export type ShotType =
+  | "hook_montage"
+  | "card_lineup"
+  | "card_spotlight"
+  | "pair_compare"
+  | "tier_stack"
+  | "warning_cut"
+  | "verdict_wall"
+  | "article_cutaway";
 
 export type ArticleImage = {
   id: string;
@@ -66,9 +75,17 @@ export type PipelineAsset = {
   qualityScore: number;
 };
 
+export type SceneFocusCue = {
+  assetId: string;
+  startMs: number;
+  endMs: number;
+  label?: string;
+};
+
 export type VideoScene = {
   id: string;
   title: string;
+  shotType?: ShotType;
   headline?: string;
   beats?: string[];
   sectionTitle?: string;
@@ -79,12 +96,14 @@ export type VideoScene = {
   cardIds?: string[];
   assetIds: string[];
   audioPath?: string;
+  audioHash?: string;
   durationSeconds: number;
   captions: Caption[];
+  focusCues?: SceneFocusCue[];
 };
 
 export type VoiceConfig = {
-  provider: "elevenlabs" | "none";
+  provider: "elevenlabs" | "edge-tts" | "none";
   modelId: string;
   voiceId?: string;
   voiceName?: string;
@@ -92,6 +111,7 @@ export type VoiceConfig = {
     stability: number;
     similarityBoost: number;
     style: number;
+    speed?: number;
   };
 };
 
@@ -112,6 +132,34 @@ export type RenderTarget = {
   maxMinutes: number;
 };
 
+export type VisualStyleConfig = {
+  id: string;
+  source: "open-design" | "local";
+  designSystem?: string;
+  skill?: string;
+  palette: {
+    background: string;
+    surface: string;
+    text: string;
+    muted: string;
+    accents: string[];
+    danger: string;
+  };
+  motion: {
+    pacing: "calm" | "editorial" | "kinetic";
+    cutsPerMinute: number;
+    cardCycleSeconds: [number, number];
+  };
+};
+
+export type ContentCoverageReport = {
+  detectedCards: number;
+  sceneCards: number;
+  assetCards: number;
+  missingSceneCards: string[];
+  missingAssetCards: string[];
+};
+
 export type RenderReport = {
   outputPath?: string;
   durationSeconds?: number;
@@ -119,6 +167,7 @@ export type RenderReport = {
   height?: number;
   fps?: number;
   ok?: boolean;
+  coverage?: ContentCoverageReport;
   warnings: string[];
 };
 
@@ -129,6 +178,7 @@ export type PipelineManifest = {
   updatedAt: string;
   article: ArticleData;
   target: RenderTarget;
+  visualStyle: VisualStyleConfig;
   voice: VoiceConfig;
   music: MusicConfig;
   assets: PipelineAsset[];

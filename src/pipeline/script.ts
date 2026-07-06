@@ -11,6 +11,7 @@ import type {
   ArticleCardMention,
   ArticleData,
   PipelineManifest,
+  ShotType,
   VideoScene,
 } from "./types";
 import {
@@ -22,6 +23,7 @@ import {
   DEFAULT_WIDTH,
   ELEVENLABS_MODEL_ID,
 } from "./constants";
+import { loadVisualStyle } from "./style";
 
 type BuildSceneOptions = {
   targetMinutes?: number;
@@ -33,6 +35,7 @@ type DraftScene = {
   headline: string;
   lead: string;
   mentions: ArticleCardMention[];
+  shotType?: ShotType;
   beats?: string[];
   includeReasons?: boolean;
 };
@@ -139,19 +142,20 @@ const splitGroup = (
 
 const makeCardNarration = (draft: DraftScene): string => {
   if (draft.includeReasons === false || draft.mentions.length === 0) {
-    return cleanText(draft.lead);
+    return cleanText(shortLine(draft.lead, 260));
   }
 
-  const detailedMentions = draft.mentions.slice(0, 3);
-  const remainingMentions = draft.mentions.slice(3);
+  const detailedMentions = draft.mentions.slice(0, 2);
+  const remainingMentions = draft.mentions.slice(2);
+  const compactLead = shortLine(draft.lead, 180);
   const points = detailedMentions
-    .map((mention) => `${mention.name}: ${reasonFromMention(mention)}`)
+    .map((mention) => `${mention.name}: ${shortLine(reasonFromMention(mention), 78)}`)
     .join(" ");
   const remaining = remainingMentions.length
-    ? `Также в группе: ${cardNameList(remainingMentions, 4)}.`
+    ? `Также в блоке: ${cardNameList(remainingMentions, 6)}.`
     : "";
 
-  return cleanText(`${draft.lead} ${points} ${remaining}`);
+  return cleanText(`${compactLead} ${points} ${remaining}`);
 };
 
 const makeCardBeats = (
@@ -215,6 +219,7 @@ const makeScene = (
   return {
     id: `scene-${String(sceneIndex + 1).padStart(2, "0")}-${draft.idSuffix}`,
     title: shortLine(draft.title, 52),
+    shotType: draft.shotType || inferShotType(draft, sceneIndex),
     headline: draft.headline,
     beats: makeCardBeats(draft, sceneIndex),
     sectionTitle: draft.mentions[0]?.sectionHeading,
@@ -229,6 +234,28 @@ const makeScene = (
   };
 };
 
+const inferShotType = (draft: DraftScene, sceneIndex: number): ShotType => {
+  if (sceneIndex === 0) {
+    return "hook_montage";
+  }
+  if (draft.idSuffix.includes("playable")) {
+    return "pair_compare";
+  }
+  if (draft.idSuffix.includes("caution") || draft.idSuffix.includes("situational")) {
+    return "warning_cut";
+  }
+  if (draft.idSuffix.includes("core")) {
+    return "tier_stack";
+  }
+  if (draft.idSuffix.includes("support") || draft.idSuffix.includes("archetype")) {
+    return "card_lineup";
+  }
+  if (draft.idSuffix.includes("verdict")) {
+    return "verdict_wall";
+  }
+  return "card_spotlight";
+};
+
 const buildCardScenes = (article: ArticleData): DraftScene[] => {
   const groups = groupedMentions(article);
   const [bestLegendaryCore, bestLegendarySupport] = splitGroup(
@@ -241,7 +268,8 @@ const buildCardScenes = (article: ArticleData): DraftScene[] => {
   );
   const [bestEpicCore, bestEpicSupport] = splitGroup(groups["best-epic"], 5);
   const [situationalEpicCore] = splitGroup(groups["situational-epic"], 6);
-  const lastYear = groups["last-year"].slice(0, 2);
+  const lastYear = groups["last-year"];
+  const otherCards = groups.other;
   const introCards = [
     ...bestLegendaryCore.slice(0, 2),
     ...bestEpicCore.slice(0, 2),
@@ -276,7 +304,7 @@ const buildCardScenes = (article: ArticleData): DraftScene[] => {
       title: "Легендарки под конкретную колоду",
       headline: "Крафт под архетип",
       lead: `Следующая группа сильная, но ее стоит крафтить только под выбранную колоду: ${cardNameList(bestLegendarySupport, 5)}.`,
-      mentions: bestLegendarySupport.slice(0, 5),
+      mentions: bestLegendarySupport,
     });
   }
 
@@ -296,7 +324,7 @@ const buildCardScenes = (article: ArticleData): DraftScene[] => {
       title: "Легендарки, где лучше подождать",
       headline: "Пыль на паузу",
       lead: `Здесь главный риск — слабый или нестабильный архетип. Без любви к конкретной колоде эти карты лучше не ставить в первый крафт.`,
-      mentions: situationalLegendaryCaution.slice(0, 5),
+      mentions: situationalLegendaryCaution,
     });
   }
 
@@ -316,7 +344,7 @@ const buildCardScenes = (article: ArticleData): DraftScene[] => {
       title: "Эпики для стабильных сборок",
       headline: "Второй эшелон",
       lead: `Эти эпики не всегда первые в очереди, но хорошо работают, если вы уже играете нужный класс или контрольную сборку.`,
-      mentions: bestEpicSupport.slice(0, 5),
+      mentions: bestEpicSupport,
     });
   }
 
@@ -328,6 +356,18 @@ const buildCardScenes = (article: ArticleData): DraftScene[] => {
       lead:
         "Финальная группа выглядит сильной на бумаге, но зависит от слабых или узких архетипов. Здесь крафт оправдан только под готовый план игры.",
       mentions: situationalEpicCore,
+    });
+  }
+
+  if (otherCards.length > 0) {
+    drafts.push({
+      idSuffix: "other-cards",
+      title: "Остальные упомянутые карты",
+      headline: "Без пропусков",
+      lead: `В статье есть еще несколько карт, которые нельзя терять из видеоряда: ${cardNameList(otherCards, 8)}. Для них оставляем быстрый монтаж, без лишнего пересказа, чтобы зритель видел весь список и понимал, где заканчивается основной приоритет.`,
+      mentions: otherCards,
+      shotType: "card_lineup",
+      includeReasons: false,
     });
   }
 
@@ -424,6 +464,7 @@ export const buildInitialManifest = (
       minMinutes: DEFAULT_MIN_MINUTES,
       maxMinutes: DEFAULT_MAX_MINUTES,
     },
+    visualStyle: loadVisualStyle(),
     voice: {
       provider: "none",
       modelId: ELEVENLABS_MODEL_ID,

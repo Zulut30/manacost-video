@@ -23,6 +23,25 @@ export const sampleManifest: PipelineManifest = {
     minMinutes: 3,
     maxMinutes: 5,
   },
+  visualStyle: {
+    id: "sample-opendesign-wired",
+    source: "local",
+    designSystem: "wired",
+    skill: "after-hours-editorial-template",
+    palette: {
+      background: "#050607",
+      surface: "#101214",
+      text: "#fff7df",
+      muted: "rgba(255,255,255,0.66)",
+      accents: ["#f0b744", "#58c7de", "#ef4d3f", "#9ee66e"],
+      danger: "#ef4d3f",
+    },
+    motion: {
+      pacing: "kinetic",
+      cutsPerMinute: 42,
+      cardCycleSeconds: [1.05, 2.1],
+    },
+  },
   voice: {
     provider: "none",
     modelId: "eleven_multilingual_v2",

@@ -94,14 +94,30 @@ const SceneView: React.FC<{
   const foregroundAssets = hasExplicitCards
     ? orderedForegroundAssets
     : [...orderedForegroundAssets].sort((a, b) => visualPriority(b) - visualPriority(a));
-  const activeVisualIndex = getActiveVisualIndex(
+  const fallbackVisualIndex = getActiveVisualIndex(
     foregroundAssets.length,
     frame,
     durationInFrames,
     fps,
   );
+  const focusedVisualIndex = getFocusedVisualIndex(
+    foregroundAssets,
+    scene,
+    frame,
+    fps,
+  );
+  const activeVisualIndex = focusedVisualIndex ?? fallbackVisualIndex;
   const activeVisualAsset = foregroundAssets[activeVisualIndex];
-  const accent = sceneIndex % 2 === 0 ? "#f0b744" : "#58c7de";
+  const accents = manifest.visualStyle?.palette.accents || [
+    "#f0b744",
+    "#58c7de",
+    "#ef4d3f",
+    "#9ee66e",
+  ];
+  const accent =
+    scene.shotType === "warning_cut"
+      ? manifest.visualStyle?.palette.danger || "#ef4d3f"
+      : accents[sceneIndex % accents.length];
   const fadeIn = interpolate(frame, [0, fps * 0.65], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
@@ -113,6 +129,10 @@ const SceneView: React.FC<{
   });
   const headline = getSceneHeadline(scene);
   const beats = getSceneBeats(scene);
+  const visualAssets =
+    scene.shotType === "verdict_wall"
+      ? manifest.assets.filter((asset) => asset.kind === "image" && asset.role === "card")
+      : foregroundAssets;
 
   return (
     <AbsoluteFill>
@@ -253,14 +273,14 @@ const SceneView: React.FC<{
       </div>
 
       <CinematicVisuals
-        assets={foregroundAssets}
+        scene={scene}
+        assets={visualAssets}
         accent={accent}
         progress={progress}
         frame={frame}
         fps={fps}
         durationInFrames={durationInFrames}
         activeIndex={activeVisualIndex}
-        sceneTitle={scene.title}
       />
       <AnimatedSubtitles
         scene={scene}
@@ -322,7 +342,7 @@ const VisualBackground: React.FC<{
   sceneIndex: number;
   isCardBackground?: boolean;
 }> = ({ asset, progress, sceneIndex, isCardBackground = false }) => {
-  const scale = isCardBackground ? 3.1 + progress * 0.24 : 1.05 + progress * 0.08;
+  const scale = isCardBackground ? 2.55 + progress * 0.14 : 1.05 + progress * 0.08;
   const x = (sceneIndex % 3) * 16 - progress * 38;
   const y = sceneIndex % 2 === 0 ? progress * -14 : progress * 14;
 
@@ -341,16 +361,16 @@ const VisualBackground: React.FC<{
           objectPosition: "center",
           transform: `scale(${scale}) translate(${x}px, ${y}px)`,
           filter: isCardBackground
-            ? "blur(34px) saturate(1.18) contrast(1.12) brightness(0.34)"
+            ? "blur(46px) saturate(1.08) contrast(1.02) brightness(0.24)"
             : "saturate(1.08) contrast(1.06) brightness(0.72)",
-          opacity: isCardBackground ? 0.58 : 1,
+          opacity: isCardBackground ? 0.34 : 1,
         }}
       />
       {isCardBackground ? (
         <AbsoluteFill
           style={{
             background:
-              "radial-gradient(circle at 72% 42%, rgba(0,0,0,0.18), rgba(0,0,0,0.82) 62%), linear-gradient(90deg, rgba(0,0,0,0.82), rgba(0,0,0,0.24))",
+              "radial-gradient(circle at 72% 42%, rgba(0,0,0,0.30), rgba(0,0,0,0.88) 62%), linear-gradient(90deg, rgba(0,0,0,0.88), rgba(0,0,0,0.32))",
           }}
         />
       ) : null}
@@ -565,6 +585,7 @@ const AnimatedSubtitles: React.FC<{
     words.length - 1,
     Math.max(0, Math.floor(progress * words.length)),
   );
+  const fontSize = Math.max(42, Math.min(62, Math.round(2300 / Math.max(36, caption.text.length))));
 
   return (
     <div
@@ -572,7 +593,7 @@ const AnimatedSubtitles: React.FC<{
         position: "absolute",
         left: 128,
         bottom: 78,
-        width: 1500,
+        width: 1260,
         minHeight: 132,
         padding: "26px 34px 28px",
         backgroundColor: "rgba(0,0,0,0.80)",
@@ -596,11 +617,11 @@ const AnimatedSubtitles: React.FC<{
         style={{
           display: "flex",
           flexWrap: "wrap",
-          gap: "8px 14px",
+          gap: "10px 20px",
           alignItems: "center",
           color: "#fff7df",
-          fontSize: 64,
-          lineHeight: 1,
+          fontSize,
+          lineHeight: 1.04,
           fontWeight: 930,
           letterSpacing: 0,
           textTransform: "uppercase",
@@ -614,6 +635,8 @@ const AnimatedSubtitles: React.FC<{
             <span
               key={`${word}-${index}`}
               style={{
+                display: "inline-block",
+                marginRight: 2,
                 color: isActive ? accent : hasPassed ? "rgba(255,247,223,0.72)" : "#fff7df",
                 transform: `translateY(${isActive ? -4 : 0}px) scale(${isActive ? 1.06 : 1})`,
               }}
@@ -628,6 +651,7 @@ const AnimatedSubtitles: React.FC<{
 };
 
 const CinematicVisuals: React.FC<{
+  scene: VideoScene;
   assets: PipelineAsset[];
   accent: string;
   progress: number;
@@ -635,8 +659,104 @@ const CinematicVisuals: React.FC<{
   fps: number;
   durationInFrames: number;
   activeIndex: number;
-  sceneTitle: string;
-}> = ({ assets, accent, progress, frame, fps, durationInFrames, activeIndex, sceneTitle }) => {
+}> = ({
+  scene,
+  assets,
+  accent,
+  progress,
+  frame,
+  fps,
+  durationInFrames,
+  activeIndex,
+}) => {
+  if (scene.shotType === "hook_montage" || scene.shotType === "card_lineup") {
+    return (
+      <MontageVisuals
+        assets={assets}
+        accent={accent}
+        progress={progress}
+        frame={frame}
+        fps={fps}
+        durationInFrames={durationInFrames}
+        activeIndex={activeIndex}
+      />
+    );
+  }
+
+  if (scene.shotType === "tier_stack") {
+    return (
+      <TierStackVisuals
+        assets={assets}
+        accent={accent}
+        progress={progress}
+        frame={frame}
+        activeIndex={activeIndex}
+      />
+    );
+  }
+
+  if (scene.shotType === "pair_compare") {
+    return (
+      <PairCompareVisuals
+        assets={assets}
+        accent={accent}
+        progress={progress}
+        frame={frame}
+        fps={fps}
+        activeIndex={activeIndex}
+      />
+    );
+  }
+
+  if (scene.shotType === "warning_cut") {
+    return (
+      <WarningCutVisuals
+        assets={assets}
+        accent={accent}
+        progress={progress}
+        frame={frame}
+        fps={fps}
+        durationInFrames={durationInFrames}
+        activeIndex={activeIndex}
+      />
+    );
+  }
+
+  if (scene.shotType === "verdict_wall") {
+    return (
+      <VerdictWallVisuals
+        assets={assets}
+        accent={accent}
+        progress={progress}
+        frame={frame}
+      />
+    );
+  }
+
+  return (
+    <SpotlightVisuals
+      assets={assets}
+      accent={accent}
+      progress={progress}
+      frame={frame}
+      fps={fps}
+      durationInFrames={durationInFrames}
+      activeIndex={activeIndex}
+      scene={scene}
+    />
+  );
+};
+
+const SpotlightVisuals: React.FC<{
+  scene: VideoScene;
+  assets: PipelineAsset[];
+  accent: string;
+  progress: number;
+  frame: number;
+  fps: number;
+  durationInFrames: number;
+  activeIndex: number;
+}> = ({ scene, assets, accent, progress, frame, fps, durationInFrames, activeIndex }) => {
   if (assets.length === 0) {
     return null;
   }
@@ -658,8 +778,8 @@ const CinematicVisuals: React.FC<{
   const float = Math.sin(progress * Math.PI * 2) * -18;
   const rotate = interpolate(progress, [0, 1], [-0.8, 0.9]);
   const cardScale = interpolate(reveal, [0, 1], [0.94, 1]);
-  const reelAssets = assets.slice(0, 8);
-  const callout = calloutForScene(sceneTitle);
+  const reelAssets = reelWindow(assets, activeIndex, 8);
+  const callout = calloutForScene(scene);
 
   return (
     <div
@@ -674,7 +794,10 @@ const CinematicVisuals: React.FC<{
       {assets.length > 1 ? (
         <CardReel
           assets={reelAssets}
-          activeIndex={activeIndex}
+          activeIndex={Math.max(
+            0,
+            reelAssets.findIndex((asset) => asset.id === featured.id),
+          )}
           accent={accent}
           frame={frame}
         />
@@ -783,6 +906,547 @@ const CinematicVisuals: React.FC<{
   );
 };
 
+const reelWindow = (
+  assets: PipelineAsset[],
+  activeIndex: number,
+  count: number,
+): PipelineAsset[] => {
+  if (assets.length <= count) {
+    return assets;
+  }
+
+  const half = Math.floor(count / 2);
+  const start = Math.min(
+    Math.max(0, activeIndex - half),
+    Math.max(0, assets.length - count),
+  );
+  return assets.slice(start, start + count);
+};
+
+const CardImageFrame: React.FC<{
+  asset: PipelineAsset;
+  width: number;
+  height: number;
+  accent: string;
+  active?: boolean;
+  label?: string;
+}> = ({ asset, width, height, accent, active = false, label }) => {
+  const isWide = assetAspect(asset) > 1.18;
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        width,
+        height,
+        backgroundColor: "rgba(0,0,0,0.48)",
+        border: `3px solid ${active ? accent : "rgba(255,255,255,0.18)"}`,
+        boxShadow: active
+          ? `0 34px 82px rgba(0,0,0,0.62), 0 0 44px ${accent}55`
+          : "0 22px 54px rgba(0,0,0,0.46)",
+        overflow: "hidden",
+      }}
+    >
+      <Img
+        src={staticFile(asset.path)}
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: isWide ? "cover" : "contain",
+          filter: active
+            ? "saturate(1.1) contrast(1.06)"
+            : "saturate(0.92) contrast(0.98)",
+        }}
+      />
+      {label ? (
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            padding: "10px 12px",
+            backgroundColor: "rgba(0,0,0,0.78)",
+            color: "#fff7df",
+            fontSize: Math.min(30, Math.max(20, 420 / Math.max(1, label.length))),
+            lineHeight: 1.04,
+            fontWeight: 850,
+            textAlign: "center",
+          }}
+        >
+          {label}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+const MontageVisuals: React.FC<{
+  assets: PipelineAsset[];
+  accent: string;
+  progress: number;
+  frame: number;
+  fps: number;
+  durationInFrames: number;
+  activeIndex: number;
+}> = ({ assets, accent, progress, frame, fps, durationInFrames, activeIndex }) => {
+  if (assets.length === 0) {
+    return null;
+  }
+
+  const featured = assets[activeIndex];
+  const displayAssets = reelWindow(assets, activeIndex, 10);
+  const cardCycleFrames = getCardCycleFrames(assets.length, durationInFrames, fps);
+  const cycleFrame = frame % cardCycleFrames;
+  const reveal = interpolate(cycleFrame, [0, 0.18 * fps], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.bezier(0.16, 1, 0.3, 1),
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right: 52,
+        top: 42,
+        width: 1140,
+        height: 1320,
+      }}
+    >
+      {displayAssets.map((asset, index) => {
+        const column = index % 3;
+        const row = Math.floor(index / 3);
+        const drift = Math.sin(progress * Math.PI * 2 + index) * 18;
+        const entrance = interpolate(frame, [index * 4, index * 4 + 18], [0, 1], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+          easing: Easing.bezier(0.16, 1, 0.3, 1),
+        });
+
+        return (
+          <div
+            key={asset.id}
+            style={{
+              position: "absolute",
+              left: 70 + column * 250 + drift,
+              top: 64 + row * 306 - progress * 60,
+              opacity: interpolate(entrance, [0, 1], [0, 0.74]),
+              transform: `rotate(${index % 2 === 0 ? -5 : 4}deg) scale(${
+                0.9 + entrance * 0.1
+              })`,
+            }}
+          >
+            <CardImageFrame
+              asset={asset}
+              width={190}
+              height={270}
+              accent={accent}
+            />
+          </div>
+        );
+      })}
+
+      <div
+        style={{
+          position: "absolute",
+          right: 18,
+          top: 176,
+          transform: `translateY(${(1 - reveal) * 54}px) scale(${
+            0.94 + reveal * 0.06
+          }) rotate(${interpolate(progress, [0, 1], [-1.4, 1.2])}deg)`,
+          opacity: reveal,
+        }}
+      >
+        <CardImageFrame
+          asset={featured}
+          width={610}
+          height={890}
+          accent={accent}
+          active
+          label={featured.title}
+        />
+      </div>
+
+      <div
+        style={{
+          position: "absolute",
+          right: 18,
+          bottom: 74,
+          width: 610,
+          height: 8,
+          backgroundColor: "rgba(255,255,255,0.15)",
+        }}
+      >
+        <div
+          style={{
+            width: `${Math.round(((activeIndex + cycleFrame / cardCycleFrames) / assets.length) * 10000) / 100}%`,
+            height: "100%",
+            backgroundColor: accent,
+          }}
+        />
+      </div>
+    </div>
+  );
+};
+
+const TierStackVisuals: React.FC<{
+  assets: PipelineAsset[];
+  accent: string;
+  progress: number;
+  frame: number;
+  activeIndex: number;
+}> = ({ assets, accent, progress, frame, activeIndex }) => {
+  const displayAssets = assets.slice(0, 6);
+  if (displayAssets.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right: 84,
+        top: 104,
+        width: 960,
+        height: 1190,
+      }}
+    >
+      {displayAssets.map((asset, index) => {
+        const isActive = index === activeIndex % displayAssets.length;
+        const entrance = interpolate(frame, [index * 6, index * 6 + 24], [0, 1], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+          easing: Easing.bezier(0.16, 1, 0.3, 1),
+        });
+
+        return (
+          <div
+            key={asset.id}
+            style={{
+              position: "absolute",
+              left: isActive ? 0 : 64,
+              top: 38 + index * 180,
+              width: isActive ? 900 : 800,
+              height: 160,
+              display: "flex",
+              alignItems: "center",
+              gap: 22,
+              padding: "14px 22px",
+              backgroundColor: isActive ? "rgba(255,247,223,0.10)" : "rgba(0,0,0,0.42)",
+              borderLeft: `8px solid ${isActive ? accent : "rgba(255,255,255,0.16)"}`,
+              boxShadow: "0 24px 70px rgba(0,0,0,0.44)",
+              opacity: entrance,
+              transform: `translateX(${(1 - entrance) * 80}px) translateY(${
+                Math.sin(progress * Math.PI * 2 + index) * 4
+              }px)`,
+            }}
+          >
+            <div
+              style={{
+                width: 82,
+                color: isActive ? accent : "rgba(255,255,255,0.48)",
+                fontSize: 78,
+                lineHeight: 1,
+                fontWeight: 950,
+              }}
+            >
+              {String(index + 1).padStart(2, "0")}
+            </div>
+            <CardImageFrame
+              asset={asset}
+              width={102}
+              height={138}
+              accent={accent}
+              active={isActive}
+            />
+            <div
+              style={{
+                color: "#fff7df",
+                fontSize: isActive ? 42 : 36,
+                lineHeight: 1.04,
+                fontWeight: 880,
+                maxWidth: 590,
+              }}
+            >
+              {asset.title}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const PairCompareVisuals: React.FC<{
+  assets: PipelineAsset[];
+  accent: string;
+  progress: number;
+  frame: number;
+  fps: number;
+  activeIndex: number;
+}> = ({ assets, accent, progress, frame, fps, activeIndex }) => {
+  if (assets.length === 0) {
+    return null;
+  }
+  const first = assets[activeIndex];
+  const second = assets[(activeIndex + 1) % assets.length] || first;
+  const reveal = interpolate(frame, [0, 0.35 * fps], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.bezier(0.16, 1, 0.3, 1),
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right: 70,
+        top: 132,
+        width: 1040,
+        height: 1120,
+        opacity: reveal,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 72 + Math.sin(progress * Math.PI * 2) * 12,
+          transform: `translateX(${(1 - reveal) * -80}px) rotate(-2deg)`,
+        }}
+      >
+        <CardImageFrame
+          asset={first}
+          width={455}
+          height={670}
+          accent={accent}
+          active
+          label={first.title}
+        />
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 210 + Math.sin(progress * Math.PI * 2 + 1.7) * 12,
+          transform: `translateX(${(1 - reveal) * 80}px) rotate(2deg)`,
+        }}
+      >
+        <CardImageFrame
+          asset={second}
+          width={455}
+          height={670}
+          accent={accent}
+          active
+          label={second.title}
+        />
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          left: 446,
+          top: 424,
+          width: 150,
+          height: 150,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: accent,
+          color: "#050505",
+          fontSize: 56,
+          lineHeight: 1,
+          fontWeight: 950,
+          transform: `rotate(45deg) scale(${0.9 + reveal * 0.1})`,
+          boxShadow: "0 22px 64px rgba(0,0,0,0.54)",
+        }}
+      >
+        <span style={{ transform: "rotate(-45deg)" }}>VS</span>
+      </div>
+    </div>
+  );
+};
+
+const WarningCutVisuals: React.FC<{
+  assets: PipelineAsset[];
+  accent: string;
+  progress: number;
+  frame: number;
+  fps: number;
+  durationInFrames: number;
+  activeIndex: number;
+}> = ({ assets, accent, progress, frame, fps, durationInFrames, activeIndex }) => {
+  if (assets.length === 0) {
+    return null;
+  }
+  const featured = assets[activeIndex];
+  const backupAssets = reelWindow(assets, activeIndex, 5);
+  const cycleFrame = frame % getCardCycleFrames(assets.length, durationInFrames, fps);
+  const reveal = interpolate(cycleFrame, [0, 0.18 * fps], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right: 70,
+        top: 74,
+        width: 1080,
+        height: 1270,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          right: 10,
+          top: 0,
+          width: 710,
+          height: 1040,
+          transform: `translateY(${(1 - reveal) * 48}px) rotate(${
+            -2 + Math.sin(progress * Math.PI * 2) * 0.8
+          }deg)`,
+          opacity: reveal,
+        }}
+      >
+        <CardImageFrame
+          asset={featured}
+          width={710}
+          height={1040}
+          accent={accent}
+          active
+          label={featured.title}
+        />
+      </div>
+
+      {backupAssets.map((asset, index) => (
+        <div
+          key={asset.id}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 180 + index * 150,
+            opacity: 0.52,
+            transform: `rotate(${index % 2 === 0 ? -7 : 6}deg) translateX(${
+              Math.sin(progress * Math.PI * 2 + index) * 16
+            }px)`,
+          }}
+        >
+          <CardImageFrame
+            asset={asset}
+            width={170}
+            height={236}
+            accent={accent}
+          />
+        </div>
+      ))}
+
+      {["НЕ СПЕШИТЬ", "ПРОВЕРЬ КОЛОДУ"].map((label, index) => (
+        <div
+          key={label}
+          style={{
+            position: "absolute",
+            left: index === 0 ? 176 : 68,
+            bottom: index === 0 ? 166 : 72,
+            padding: "18px 24px",
+            backgroundColor: accent,
+            color: "#050505",
+            fontSize: index === 0 ? 64 : 42,
+            lineHeight: 1,
+            fontWeight: 950,
+            transform: `rotate(${index === 0 ? -3 : 4}deg)`,
+            boxShadow: "0 24px 70px rgba(0,0,0,0.46)",
+          }}
+        >
+          {label}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const VerdictWallVisuals: React.FC<{
+  assets: PipelineAsset[];
+  accent: string;
+  progress: number;
+  frame: number;
+}> = ({ assets, accent, progress, frame }) => {
+  const displayAssets = assets.slice(0, 16);
+  if (displayAssets.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right: 82,
+        top: 92,
+        width: 960,
+        height: 1210,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 0,
+          padding: "16px 22px",
+          backgroundColor: accent,
+          color: "#050505",
+          fontSize: 38,
+          lineHeight: 1,
+          fontWeight: 950,
+        }}
+      >
+        ФИНАЛЬНЫЙ СПИСОК
+      </div>
+
+      <div
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 82,
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 18,
+          width: 900,
+        }}
+      >
+        {displayAssets.map((asset, index) => {
+          const active = Math.floor(frame / 18) % displayAssets.length === index;
+          const entrance = interpolate(frame, [index * 2, index * 2 + 16], [0, 1], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+            easing: Easing.bezier(0.16, 1, 0.3, 1),
+          });
+
+          return (
+            <div
+              key={asset.id}
+              style={{
+                opacity: entrance,
+                transform: `translateY(${(1 - entrance) * 32}px) scale(${
+                  active ? 1.05 : 1
+                }) rotate(${Math.sin(progress * Math.PI * 2 + index) * 0.8}deg)`,
+              }}
+            >
+              <CardImageFrame
+                asset={asset}
+                width={210}
+                height={292}
+                accent={accent}
+                active={active}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const getCardCycleFrames = (
   assetCount: number,
   durationInFrames: number,
@@ -793,8 +1457,8 @@ const getCardCycleFrames = (
   }
 
   return Math.max(
-    Math.round(1.7 * fps),
-    Math.min(Math.floor(durationInFrames / assetCount), Math.round(3.1 * fps)),
+    Math.round(1.15 * fps),
+    Math.min(Math.floor(durationInFrames / assetCount), Math.round(2.15 * fps)),
   );
 };
 
@@ -812,25 +1476,43 @@ const getActiveVisualIndex = (
   return Math.floor(frame / cycleFrames) % assetCount;
 };
 
-const calloutForScene = (sceneTitle: string): string => {
-  const title = sceneTitle.toLowerCase();
-  if (title.includes("ядро") || title.includes("лучшие легендар")) {
-    return "ядро меты";
+const getFocusedVisualIndex = (
+  assets: PipelineAsset[],
+  scene: VideoScene,
+  frame: number,
+  fps: number,
+): number | undefined => {
+  if (!scene.focusCues || scene.focusCues.length === 0 || assets.length === 0) {
+    return undefined;
   }
-  if (title.includes("конкретную") || title.includes("архетип")) {
-    return "под колоду";
+
+  const currentMs = (frame / fps) * 1000;
+  const cue = scene.focusCues.find(
+    (item) => currentMs >= item.startMs && currentMs < item.endMs,
+  );
+  if (!cue) {
+    return undefined;
   }
-  if (title.includes("потенциал")) {
-    return "точечный крафт";
-  }
-  if (title.includes("подождать") || title.includes("пауза")) {
+
+  const index = assets.findIndex((asset) => asset.id === cue.assetId);
+  return index >= 0 ? index : undefined;
+};
+
+const calloutForScene = (scene: VideoScene): string => {
+  if (scene.shotType === "warning_cut") {
     return "не спешить";
   }
-  if (title.includes("эпик")) {
-    return "выгодный слот";
+  if (scene.shotType === "pair_compare") {
+    return "точечный крафт";
   }
-  if (title.includes("ситуатив")) {
-    return "по ситуации";
+  if (scene.shotType === "tier_stack") {
+    return "приоритет";
+  }
+  if (scene.shotType === "card_lineup") {
+    return "под колоду";
+  }
+  if (scene.shotType === "verdict_wall") {
+    return "итог";
   }
   return "крафт чек";
 };
